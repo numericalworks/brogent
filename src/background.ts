@@ -1,6 +1,7 @@
 import { runAgent } from "./lib/agent";
+import { chatEvents, listModels } from "./lib/llm";
+import { normalizeBaseUrl } from "./lib/llm/http";
 import { sanitizeHistory, trimHistory } from "./lib/messages";
-import { chatEvents, listModels } from "./lib/ollama";
 import {
   buildExecuteJobScript,
   buildJobCleanupScript,
@@ -9,6 +10,7 @@ import {
 } from "./lib/page-scripts";
 import type { BackgroundEvent, PanelRequest } from "./lib/protocol";
 import { PORT_NAME } from "./lib/protocol";
+import { getProvider, resolveProvider } from "./lib/providers";
 import { EXECUTE_JAVASCRIPT, READ_PAGE, TOOL_DEFINITIONS, isKnownTool, mutatingTool } from "./lib/tools";
 import { CONFIG_KEY, DEFAULT_CONFIG, normalizeConfig, type AppConfig, type ToolResult } from "./lib/types";
 
@@ -237,6 +239,30 @@ async function startChat(session: Session, request: Extract<PanelRequest, { type
 
   try {
     const config = await loadConfig();
+    const resolved = resolveProvider(config);
+
+    if (!resolved.baseUrl) {
+      post(port, {
+        type: "error",
+        message: "The custom provider needs a base URL, for example http://localhost:8000/v1.",
+      });
+      return;
+    }
+    if (resolved.definition.apiKeyRequired && !resolved.apiKey) {
+      post(port, {
+        type: "error",
+        message: `${resolved.definition.label} needs an API key. Add one in settings.`,
+      });
+      return;
+    }
+    if (!resolved.model) {
+      post(port, {
+        type: "error",
+        message: `No model is selected for ${resolved.definition.label}. Open settings and fetch the model list.`,
+      });
+      return;
+    }
+
     const tab =
       request.tabId != null ? await browser.tabs.get(request.tabId).catch(() => null) : await getActiveTab();
     if (!tab || tab.id == null) {
@@ -259,14 +285,15 @@ async function startChat(session: Session, request: Extract<PanelRequest, { type
       maxSteps: Math.min(20, Math.max(1, Math.round(config.maxSteps || DEFAULT_CONFIG.maxSteps))),
       signal: controller.signal,
       chat: (messages, signal) =>
-        chatEvents({
-          baseUrl: config.baseUrl,
-          apiKey: config.apiKey,
-          model: config.model,
+        chatEvents(resolved.definition.protocol, {
+          baseUrl: resolved.baseUrl,
+          apiKey: resolved.apiKey,
+          model: resolved.model,
           messages,
           tools: TOOL_DEFINITIONS,
           temperature: config.temperature,
           stream: config.stream,
+          providerLabel: resolved.definition.label,
           signal,
         }),
       executeTool: (name, args, signal) => runTool(tabId, name, args, signal),
@@ -290,11 +317,31 @@ async function handleMessage(session: Session, message: PanelRequest): Promise<v
       return;
 
     case "models": {
+      const definition = getProvider(message.provider);
+      const baseUrl = normalizeBaseUrl(message.baseUrl || definition.defaultBaseUrl);
+      if (!baseUrl) {
+        post(session.port, {
+          type: "models",
+          provider: definition.id,
+          models: [],
+          error: "Set a base URL for this provider.",
+        });
+        return;
+      }
       try {
-        const models = await listModels({ baseUrl: message.baseUrl, apiKey: message.apiKey });
-        post(session.port, { type: "models", models });
+        const models = await listModels(definition.protocol, {
+          baseUrl,
+          apiKey: message.apiKey,
+          providerLabel: definition.label,
+        });
+        post(session.port, { type: "models", provider: definition.id, models });
       } catch (error) {
-        post(session.port, { type: "models", models: [], error: errorText(error) });
+        post(session.port, {
+          type: "models",
+          provider: definition.id,
+          models: [],
+          error: errorText(error),
+        });
       }
       return;
     }

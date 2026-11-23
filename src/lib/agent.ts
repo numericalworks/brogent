@@ -1,5 +1,4 @@
-import type { ChatEvent } from "./ollama";
-import { isAbortError } from "./ollama";
+import { isAbortError, type ChatEvent } from "./llm";
 import type { ChatMessage, ToolCall } from "./types";
 
 export type AgentEvent =

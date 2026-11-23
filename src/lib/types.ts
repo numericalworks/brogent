@@ -1,9 +1,11 @@
 /**
  * Shared domain types for Brogent.
  *
- * These deliberately mirror the shape of Ollama's chat API so that messages
- * can be persisted, replayed, and posted back without translation.
+ * `ChatMessage` deliberately mirrors the common denominator of the provider
+ * APIs so a conversation can be stored once and translated per provider.
  */
+
+import { isProviderId, type ProviderId } from "./providers";
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
@@ -29,14 +31,18 @@ export interface ToolResult {
   content: string;
 }
 
+export interface ProviderSettings {
+  /** Overrides the provider's default endpoint. Empty means "use the default". */
+  baseUrl?: string;
+  /** Stored per provider so switching back does not require retyping it. */
+  apiKey?: string;
+  model?: string;
+}
+
 export interface AppConfig {
-  /** Ollama endpoint root, e.g. http://localhost:11434 or https://ollama.com */
-  baseUrl: string;
-  /** Bearer token, only needed for Ollama Cloud. */
-  apiKey: string;
-  model: string;
+  provider: ProviderId;
+  providers: Partial<Record<ProviderId, ProviderSettings>>;
   temperature: number;
-  /** Maximum number of model <-> tool round trips per request. */
   maxSteps: number;
   /** Ask the user before running model-authored JavaScript. */
   confirmScripts: boolean;
@@ -45,11 +51,7 @@ export interface AppConfig {
   systemPrompt: string;
 }
 
-export const LOCAL_BASE_URL = "http://localhost:11434";
-export const CLOUD_BASE_URL = "https://ollama.com";
-export const DEFAULT_MODEL = "llama3.1:8b";
-
-export const DEFAULT_SYSTEM_PROMPT = `You are Brogent, an agent that works inside the user's Firefox browser and runs on Ollama.
+export const DEFAULT_SYSTEM_PROMPT = `You are Brogent, an agent that works inside the user's Firefox browser and runs on the user's chosen AI provider.
 
 You act on the user's current browser tab through two tools:
 
@@ -74,9 +76,8 @@ Rules:
 - If the request is ambiguous or destructive, ask a short clarifying question before acting.`;
 
 export const DEFAULT_CONFIG: AppConfig = {
-  baseUrl: LOCAL_BASE_URL,
-  apiKey: "",
-  model: DEFAULT_MODEL,
+  provider: "ollama",
+  providers: {},
   temperature: 0.2,
   maxSteps: 6,
   confirmScripts: true,
@@ -87,13 +88,74 @@ export const DEFAULT_CONFIG: AppConfig = {
 export const CONFIG_KEY = "brogent:config";
 export const ITEMS_KEY = "brogent:items";
 
-/** Fills in missing/invalid values from a partially stored config. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeProviders(input: unknown): Partial<Record<ProviderId, ProviderSettings>> {
+  if (!isRecord(input)) return {};
+  const output: Partial<Record<ProviderId, ProviderSettings>> = {};
+  for (const [id, value] of Object.entries(input)) {
+    if (!isProviderId(id) || !isRecord(value)) continue;
+    const entry: ProviderSettings = {};
+    if (typeof value.baseUrl === "string") entry.baseUrl = value.baseUrl;
+    if (typeof value.apiKey === "string") entry.apiKey = value.apiKey;
+    if (typeof value.model === "string") entry.model = value.model;
+    output[id] = entry;
+  }
+  return output;
+}
+
+interface LegacyConfig {
+  baseUrl?: unknown;
+  apiKey?: unknown;
+  model?: unknown;
+}
+
+/**
+ * Fills in defaults, clamps numbers, and migrates the pre-provider flat
+ * config (`baseUrl`/`apiKey`/`model`) into the provider map.
+ */
 export function normalizeConfig(partial?: Partial<AppConfig> | null): AppConfig {
-  const config = { ...DEFAULT_CONFIG, ...(partial ?? {}) };
-  if (!config.baseUrl.trim()) config.baseUrl = DEFAULT_CONFIG.baseUrl;
-  if (!config.model.trim()) config.model = DEFAULT_CONFIG.model;
-  if (!config.systemPrompt.trim()) config.systemPrompt = DEFAULT_SYSTEM_PROMPT;
-  if (!Number.isFinite(config.temperature)) config.temperature = DEFAULT_CONFIG.temperature;
-  if (!Number.isFinite(config.maxSteps) || config.maxSteps < 1) config.maxSteps = DEFAULT_CONFIG.maxSteps;
-  return config;
+  if (!partial) return { ...DEFAULT_CONFIG, providers: {} };
+
+  const raw = partial as Partial<AppConfig> & LegacyConfig;
+  let provider: ProviderId = isProviderId(raw.provider) ? raw.provider : "ollama";
+
+  let providers = normalizeProviders(raw.providers);
+
+  if (!isRecord(raw.providers)) {
+    const legacyBase = typeof raw.baseUrl === "string" ? raw.baseUrl.trim() : "";
+    const legacyKey = typeof raw.apiKey === "string" ? raw.apiKey : "";
+    const legacyModel = typeof raw.model === "string" ? raw.model.trim() : "";
+    if (legacyBase || legacyKey || legacyModel) {
+      const legacyProvider: ProviderId = /ollama\.com/i.test(legacyBase) ? "ollama-cloud" : "ollama";
+      provider = legacyProvider;
+      providers = {
+        ...providers,
+        [legacyProvider]: { baseUrl: legacyBase, apiKey: legacyKey, model: legacyModel },
+      };
+    }
+  }
+
+  const temperature = Number.isFinite(raw.temperature)
+    ? Math.min(2, Math.max(0, raw.temperature as number))
+    : DEFAULT_CONFIG.temperature;
+  const maxSteps =
+    Number.isFinite(raw.maxSteps) && (raw.maxSteps as number) >= 1
+      ? Math.min(20, Math.round(raw.maxSteps as number))
+      : DEFAULT_CONFIG.maxSteps;
+
+  return {
+    provider,
+    providers,
+    temperature,
+    maxSteps,
+    confirmScripts: typeof raw.confirmScripts === "boolean" ? raw.confirmScripts : DEFAULT_CONFIG.confirmScripts,
+    stream: typeof raw.stream === "boolean" ? raw.stream : DEFAULT_CONFIG.stream,
+    systemPrompt:
+      typeof raw.systemPrompt === "string" && raw.systemPrompt.trim()
+        ? raw.systemPrompt
+        : DEFAULT_SYSTEM_PROMPT,
+  };
 }

@@ -1,18 +1,27 @@
+import { normalizeBaseUrl } from "./lib/llm/http";
 import { renderMarkdown } from "./lib/markdown";
 import { sanitizeHistory } from "./lib/messages";
 import type { BackgroundEvent, PanelRequest } from "./lib/protocol";
 import { PORT_NAME } from "./lib/protocol";
+import {
+  PROVIDERS,
+  getProvider,
+  isProviderId,
+  pickDefaultModel,
+  resolveProvider,
+  type ProviderDefinition,
+  type ProviderId,
+} from "./lib/providers";
 import { describeToolCall } from "./lib/tools";
 import {
-  CLOUD_BASE_URL,
   CONFIG_KEY,
   DEFAULT_CONFIG,
   DEFAULT_SYSTEM_PROMPT,
   ITEMS_KEY,
-  LOCAL_BASE_URL,
   normalizeConfig,
   type AppConfig,
   type ChatMessage,
+  type ProviderSettings,
   type ToolCall,
 } from "./lib/types";
 
@@ -48,8 +57,11 @@ const closeSettingsBtn = byId<HTMLButtonElement>("btn-close-settings");
 const refreshTargetBtn = byId<HTMLButtonElement>("btn-refresh-target");
 const settingsEl = byId("settings");
 const settingsForm = byId<HTMLFormElement>("settings-form");
+const providerSelect = byId<HTMLSelectElement>("provider-select");
+const providerHint = byId("provider-hint");
 const baseUrlInput = byId<HTMLInputElement>("input-base-url");
 const apiKeyInput = byId<HTMLInputElement>("input-api-key");
+const toggleKeyBtn = byId<HTMLButtonElement>("btn-toggle-key");
 const modelInput = byId<HTMLInputElement>("input-model");
 const modelOptions = byId<HTMLDataListElement>("model-options");
 const refreshModelsBtn = byId<HTMLButtonElement>("btn-refresh-models");
@@ -202,7 +214,7 @@ function handleEvent(event: BackgroundEvent): void {
       return;
 
     case "models":
-      handleModels(event.models, event.error);
+      handleModels(event.provider, event.models, event.error);
       return;
 
     case "step":
@@ -252,9 +264,18 @@ function handleEvent(event: BackgroundEvent): void {
       setStatus("Waiting for your approval…");
       return;
 
-    case "done":
-      finishRun(event.reason === "max_steps" ? "Stopped: the step limit was reached." : undefined);
+    case "done": {
+      const note =
+        event.reason === "max_steps"
+          ? "Stopped: the step limit was reached."
+          : event.reason === "length"
+            ? "The model stopped at its output limit. Ask for less at once, or raise the limit at the provider."
+            : event.reason === "safety" || event.reason === "recitation"
+              ? `The provider blocked this response (${event.reason}).`
+              : undefined;
+      finishRun(note);
       return;
+    }
 
     case "error":
       appendItem({ kind: "error", message: event.message }, true);
@@ -270,8 +291,12 @@ function handleEvent(event: BackgroundEvent): void {
   }
 }
 
-function handleModels(models: string[], error?: string): void {
+function handleModels(provider: ProviderId, models: string[], error?: string): void {
+  // Ignore replies for a provider the user has already switched away from.
+  if (provider !== state.config.provider) return;
+
   state.models = models;
+  const definition = getProvider(provider);
 
   modelOptions.replaceChildren();
   for (const name of models) {
@@ -280,34 +305,52 @@ function handleModels(models: string[], error?: string): void {
     modelOptions.append(option);
   }
 
-  updateModelSelect();
-
   if (error) {
     connDot.classList.remove("ok");
     connDot.classList.add("bad");
     connDot.title = error;
     modelsStatus.hidden = false;
     modelsStatus.classList.add("is-error");
-    modelsStatus.textContent = error;
+    modelsStatus.textContent = `${error} You can still type a model name manually.`;
   } else {
     connDot.classList.remove("bad");
     connDot.classList.add("ok");
-    connDot.title = `Connected · ${models.length} model${models.length === 1 ? "" : "s"} available`;
-    modelsStatus.hidden = models.length === 0;
+    connDot.title = `${definition.label} · ${models.length} model${models.length === 1 ? "" : "s"} available`;
+    modelsStatus.hidden = false;
     modelsStatus.classList.remove("is-error");
     modelsStatus.textContent = models.length
-      ? `Found ${models.length} model${models.length === 1 ? "" : "s"}.`
-      : "";
+      ? `Found ${models.length} model${models.length === 1 ? "" : "s"} for ${definition.label}.`
+      : "No models were listed. Type the model name manually.";
   }
 
-  if (!modelInput.value.trim() && models.length) modelInput.value = models[0]!;
+  updateModelSelect();
+
+  // Fresh provider with no saved model: pick a sensible one from the list.
+  const current = settingsEl.hidden
+    ? (state.config.providers[provider]?.model ?? "")
+    : modelInput.value;
+  if (!error && !current.trim() && models.length) {
+    const picked = pickDefaultModel(models);
+    if (picked) {
+      // Keep the connection values that just produced this list too.
+      if (!settingsEl.hidden) stashProviderFields();
+      setActiveModel(picked);
+      showToast(`Using ${picked} for ${definition.label}.`);
+    }
+  }
 }
 
-function requestModels(baseUrl?: string, apiKey?: string): void {
+function requestModels(): void {
+  const definition = getProvider(state.config.provider);
+  const saved = state.config.providers[state.config.provider] ?? {};
+  const form = settingsEl.hidden ? saved : readProviderFields();
+  const baseUrl = normalizeBaseUrl(form.baseUrl || definition.defaultBaseUrl);
+
   const sent = post({
     type: "models",
-    baseUrl: baseUrl ?? state.config.baseUrl,
-    apiKey: apiKey ?? state.config.apiKey,
+    provider: definition.id,
+    baseUrl,
+    apiKey: form.apiKey ?? "",
   });
   if (!sent) showToast("Not connected to Brogent's background yet — try again in a moment.");
 }
@@ -700,48 +743,133 @@ async function refreshTarget(): Promise<void> {
 
 /* ------------------------------------------------------------ settings */
 
-function isCloudUrl(url: string): boolean {
-  return /^https:\/\/([a-z0-9-]+\.)*ollama\.com\/?$/i.test(url.trim());
+function currentProvider(): ProviderDefinition {
+  return getProvider(state.config.provider);
+}
+
+function providerSettings(id: ProviderId = state.config.provider): ProviderSettings {
+  return state.config.providers[id] ?? {};
+}
+
+function buildProviderOptions(): void {
+  providerSelect.replaceChildren();
+  const groups: Array<{ label: string; group: ProviderDefinition["group"] }> = [
+    { label: "Local", group: "local" },
+    { label: "Cloud", group: "cloud" },
+    { label: "Other", group: "custom" },
+  ];
+
+  for (const { label, group } of groups) {
+    const definitions = PROVIDERS.filter((provider) => provider.group === group);
+    if (!definitions.length) continue;
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = label;
+    for (const definition of definitions) {
+      const option = document.createElement("option");
+      option.value = definition.id;
+      option.textContent = definition.label;
+      optgroup.append(option);
+    }
+    providerSelect.append(optgroup);
+  }
+}
+
+function renderProviderHint(definition: ProviderDefinition): void {
+  providerHint.replaceChildren();
+  const parts: string[] = [];
+  if (definition.hint) parts.push(definition.hint);
+  if (definition.defaultBaseUrl) parts.push(`Default URL: ${definition.defaultBaseUrl}.`);
+  parts.push(definition.apiKeyRequired ? "An API key is required." : "No API key is needed for most setups.");
+  providerHint.append(document.createTextNode(parts.join(" ")));
+
+  if (definition.docsUrl) {
+    providerHint.append(document.createTextNode(" "));
+    const link = document.createElement("a");
+    link.href = definition.docsUrl;
+    link.textContent = definition.apiKeyRequired ? "Get an API key ↗" : "Documentation ↗";
+    providerHint.append(link);
+  }
+}
+
+function fillProviderFields(id: ProviderId): void {
+  const definition = getProvider(id);
+  const saved = state.config.providers[id] ?? {};
+  baseUrlInput.value = saved.baseUrl ?? "";
+  baseUrlInput.placeholder = definition.defaultBaseUrl || "https://…/v1";
+  apiKeyInput.type = "password";
+  apiKeyInput.value = saved.apiKey ?? "";
+  apiKeyInput.placeholder = definition.apiKeyRequired ? "Required" : "Optional";
+  toggleKeyBtn.textContent = "Show";
+  modelInput.value = saved.model ?? "";
+  modelInput.placeholder = definition.modelPlaceholder;
+  renderProviderHint(definition);
 }
 
 function fillSettingsForm(config: AppConfig): void {
-  baseUrlInput.value = config.baseUrl;
-  apiKeyInput.value = config.apiKey;
-  modelInput.value = config.model;
+  providerSelect.value = config.provider;
+  fillProviderFields(config.provider);
   temperatureInput.value = String(config.temperature);
   maxStepsInput.value = String(config.maxSteps);
   confirmInput.checked = config.confirmScripts;
   streamInput.checked = config.stream;
   systemPromptInput.value = config.systemPrompt;
-
-  const connection = isCloudUrl(config.baseUrl) ? "cloud" : "local";
-  for (const radio of settingsForm.querySelectorAll<HTMLInputElement>('input[name="connection"]')) {
-    radio.checked = radio.value === connection;
-  }
-  syncConnectionStyles();
 }
 
-function syncConnectionStyles(): void {
-  for (const label of settingsForm.querySelectorAll<HTMLLabelElement>(".segmented label")) {
-    const input = label.querySelector<HTMLInputElement>('input[name="connection"]');
-    label.classList.toggle("is-active", Boolean(input?.checked));
-  }
+/** Reads the connection fields into a normalized provider entry. */
+function readProviderFields(): ProviderSettings {
+  const definition = currentProvider();
+  const rawBase = baseUrlInput.value.trim();
+  const baseUrl = normalizeBaseUrl(rawBase);
+  return {
+    // Store an override only when it differs from the provider default.
+    baseUrl: baseUrl && baseUrl !== definition.defaultBaseUrl ? baseUrl : "",
+    apiKey: apiKeyInput.value.trim(),
+    model: modelInput.value.trim(),
+  };
 }
 
-function normalizeUrl(value: string): string {
-  let url = value.trim();
-  if (!url) return LOCAL_BASE_URL;
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `http://${url}`;
-  return url.replace(/\/+$/, "");
+function stashProviderFields(): void {
+  const id = state.config.provider;
+  state.config.providers = { ...state.config.providers, [id]: readProviderFields() };
+}
+
+function persistConfig(): void {
+  void browser.storage.local.set({ [CONFIG_KEY]: state.config }).catch(() => undefined);
+}
+
+function setActiveModel(model: string): void {
+  const id = state.config.provider;
+  state.config.providers = {
+    ...state.config.providers,
+    [id]: { ...(state.config.providers[id] ?? {}), model },
+  };
+  if (!settingsEl.hidden) modelInput.value = model;
+  updateModelSelect();
+  persistConfig();
+}
+
+function switchProvider(id: ProviderId): void {
+  if (id === state.config.provider) return;
+  stashProviderFields();
+  state.config.provider = id;
+  persistConfig();
+  fillProviderFields(id);
+  state.models = [];
+  modelOptions.replaceChildren();
+  modelsStatus.hidden = true;
+  updateModelSelect();
+  requestModels();
 }
 
 function readSettingsForm(): AppConfig {
   const temperature = Number.parseFloat(temperatureInput.value);
   const maxSteps = Number.parseInt(maxStepsInput.value, 10);
   return {
-    baseUrl: normalizeUrl(baseUrlInput.value),
-    apiKey: apiKeyInput.value.trim(),
-    model: modelInput.value.trim(),
+    ...state.config,
+    providers: {
+      ...state.config.providers,
+      [state.config.provider]: readProviderFields(),
+    },
     temperature: Number.isFinite(temperature) ? Math.min(2, Math.max(0, temperature)) : DEFAULT_CONFIG.temperature,
     maxSteps: Number.isFinite(maxSteps) ? Math.min(20, Math.max(1, maxSteps)) : DEFAULT_CONFIG.maxSteps,
     confirmScripts: confirmInput.checked,
@@ -762,13 +890,21 @@ function closeSettings(): void {
 
 function saveSettings(): void {
   const config = readSettingsForm();
-  if (!config.model) {
+  const resolved = resolveProvider(config);
+
+  if (!resolved.baseUrl) {
+    showToast("Add a base URL for the custom provider.");
+    baseUrlInput.focus();
+    return;
+  }
+  if (!resolved.model) {
     showToast("Choose a model before saving.");
     modelInput.focus();
     return;
   }
+
   state.config = config;
-  void browser.storage.local.set({ [CONFIG_KEY]: state.config });
+  persistConfig();
   fillSettingsForm(state.config);
   updateModelSelect();
   closeSettings();
@@ -777,8 +913,9 @@ function saveSettings(): void {
 }
 
 function updateModelSelect(): void {
+  const current = providerSettings().model ?? "";
   const names = new Set(state.models);
-  if (state.config.model) names.add(state.config.model);
+  if (current) names.add(current);
 
   modelSelect.replaceChildren();
   if (!names.size) {
@@ -797,7 +934,7 @@ function updateModelSelect(): void {
     option.textContent = name;
     modelSelect.append(option);
   }
-  modelSelect.value = state.config.model;
+  modelSelect.value = current;
 }
 
 /* ----------------------------------------------------------- persistence */
@@ -914,8 +1051,8 @@ function wireEvents(): void {
     });
   }
 
-  messagesEl.addEventListener("click", (event) => {
-    const anchor = (event.target as HTMLElement | null)?.closest("a");
+  document.addEventListener("click", (event) => {
+    const anchor = (event.target as HTMLElement | null)?.closest("a[href]");
     if (!anchor) return;
     const href = anchor.getAttribute("href") ?? "";
     if (!/^(https?:|mailto:)/i.test(href)) return;
@@ -941,31 +1078,25 @@ function wireEvents(): void {
   refreshModelsBtn.addEventListener("click", () => {
     modelsStatus.hidden = false;
     modelsStatus.classList.remove("is-error");
-    modelsStatus.textContent = "Contacting Ollama…";
-    requestModels(normalizeUrl(baseUrlInput.value), apiKeyInput.value.trim());
+    modelsStatus.textContent = `Contacting ${currentProvider().label}…`;
+    requestModels();
   });
 
   modelSelect.addEventListener("change", () => {
     if (!modelSelect.value) return;
-    state.config.model = modelSelect.value;
-    void browser.storage.local.set({ [CONFIG_KEY]: state.config });
-    if (settingsEl.hidden) modelInput.value = modelSelect.value;
+    setActiveModel(modelSelect.value);
+    if (!settingsEl.hidden) modelInput.value = modelSelect.value;
   });
 
-  for (const radio of settingsForm.querySelectorAll<HTMLInputElement>('input[name="connection"]')) {
-    radio.addEventListener("change", () => {
-      if (!radio.checked) return;
-      if (radio.value === "cloud") {
-        if (!isCloudUrl(baseUrlInput.value)) baseUrlInput.value = CLOUD_BASE_URL;
-        if (!apiKeyInput.value) apiKeyInput.focus();
-      } else {
-        if (isCloudUrl(baseUrlInput.value) || !baseUrlInput.value.trim()) {
-          baseUrlInput.value = LOCAL_BASE_URL;
-        }
-      }
-      syncConnectionStyles();
-    });
-  }
+  providerSelect.addEventListener("change", () => {
+    if (isProviderId(providerSelect.value)) switchProvider(providerSelect.value);
+  });
+
+  toggleKeyBtn.addEventListener("click", () => {
+    const showing = apiKeyInput.type === "text";
+    apiKeyInput.type = showing ? "password" : "text";
+    toggleKeyBtn.textContent = showing ? "Show" : "Hide";
+  });
 
   window.addEventListener("focus", () => void refreshTarget());
   browser.tabs.onActivated.addListener(() => void refreshTarget());
@@ -977,6 +1108,7 @@ function wireEvents(): void {
 }
 
 async function init(): Promise<void> {
+  buildProviderOptions();
   wireEvents();
   await loadPersistedState();
   await refreshTarget();

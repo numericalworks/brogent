@@ -1,10 +1,10 @@
-import type { OllamaTool } from "./ollama";
+import type { LlmTool } from "./llm/types";
 import { parseReadPageOptions } from "./page-scripts";
 
 export const READ_PAGE = "read_page";
 export const EXECUTE_JAVASCRIPT = "execute_javascript";
 
-export const TOOL_DEFINITIONS: OllamaTool[] = [
+export const TOOL_DEFINITIONS: LlmTool[] = [
   {
     type: "function",
     function: {

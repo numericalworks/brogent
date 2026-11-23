@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { runAgent, type AgentDeps, type AgentEvent } from "../src/lib/agent";
-import type { ChatEvent } from "../src/lib/ollama";
+import type { ChatEvent } from "../src/lib/llm";
 
 function chatFrom(turns: ChatEvent[][]) {
   let index = 0;

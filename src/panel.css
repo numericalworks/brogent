@@ -849,7 +849,8 @@ pre {
   color: var(--muted);
 }
 
-.field-row input {
+.field-row input,
+.field-row select {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border-strong);
@@ -859,9 +860,25 @@ pre {
   outline: none;
 }
 
-.field-row input:focus {
+.field-row input:focus,
+.field-row select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.provider-select {
+  font-size: 12.5px;
+}
+
+.input-with-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.input-with-button input {
+  flex: 1;
 }
 
 .field textarea {
@@ -879,39 +896,6 @@ pre {
 
 .field textarea:focus {
   border-color: var(--accent);
-}
-
-.segmented {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--bg-soft);
-}
-
-.segmented label {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.segmented input {
-  accent-color: var(--accent);
-  margin: 0;
-}
-
-.segmented label.is-active {
-  background: var(--bg-raised);
-  color: var(--text);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .check-row {
@@ -981,6 +965,13 @@ pre {
 .secondary-button:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.secondary-button.tiny {
+  padding: 4px 7px;
+  font-size: 11px;
+  flex: none;
+  justify-self: auto;
 }
 
 .settings-actions {
