@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brogent</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Brogent</span>
+          <span id="conn-dot" class="conn-dot" role="status" aria-label="Connection status" title="Checking Ollama…"></span>
+        </div>
+        <div class="header-actions">
+          <select id="model-select" class="model-select" aria-label="Model" title="Model"></select>
+          <button id="btn-new" class="icon-button" type="button" title="New chat" aria-label="New chat">＋</button>
+          <button id="btn-settings" class="icon-button" type="button" title="Settings" aria-label="Settings">⚙</button>
+        </div>
+      </header>
+
+      <div id="target-bar" class="target-bar" hidden>
+        <img id="target-favicon" class="target-favicon" alt="" />
+        <span id="target-title" class="target-title"></span>
+        <button id="btn-refresh-target" class="icon-button small" type="button" title="Use the current tab" aria-label="Use the current tab">⟳</button>
+      </div>
+
+      <main id="messages" class="messages" aria-live="polite"></main>
+
+      <section id="empty" class="empty">
+        <div class="empty-hero">
+          <div class="empty-mark" aria-hidden="true"></div>
+          <h1>Your browser, with an agent in it.</h1>
+          <p>
+            Ask about the current tab, pull structured data out of it, or tell Brogent to change it.
+            Runs on your own Ollama server or Ollama Cloud.
+          </p>
+        </div>
+        <div class="suggestions">
+          <button class="suggestion" type="button" data-prompt="Summarize this page in five bullet points.">Summarize this page</button>
+          <button class="suggestion" type="button" data-prompt="Extract the key facts from this page as a Markdown table with sources.">Extract key facts as a table</button>
+          <button class="suggestion" type="button" data-prompt="List every link on this page, grouped by what they point to.">List all links</button>
+          <button class="suggestion" type="button" data-prompt="Make this page easier to read: increase the base font size and widen the line height. Don't change the content.">Make this page easier to read</button>
+        </div>
+      </section>
+
+      <footer class="composer">
+        <div id="run-status" class="run-status" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="run-status-text"></span>
+          <button id="btn-stop" class="link-button" type="button">Stop</button>
+        </div>
+        <div class="composer-box">
+          <textarea id="input" rows="1" placeholder="Ask about this page, or tell me what to change…" aria-label="Message"></textarea>
+          <div class="composer-actions">
+            <span class="hint">Enter to send · Shift+Enter for a new line</span>
+            <button id="btn-send" class="send-button" type="button" title="Send" aria-label="Send">↑</button>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <div id="settings" class="settings" hidden>
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button id="btn-close-settings" class="icon-button" type="button" aria-label="Close settings">✕</button>
+      </div>
+
+      <form id="settings-form" class="settings-body">
+        <fieldset class="field">
+          <legend>Connection</legend>
+          <div class="segmented" role="radiogroup" aria-label="Ollama connection type">
+            <label><input type="radio" name="connection" value="local" /> Local Ollama</label>
+            <label><input type="radio" name="connection" value="cloud" /> Ollama Cloud</label>
+          </div>
+          <label class="field-row">
+            <span>Base URL</span>
+            <input id="input-base-url" type="text" spellcheck="false" autocomplete="off" placeholder="http://localhost:11434" />
+          </label>
+          <label class="field-row">
+            <span>API key</span>
+            <input id="input-api-key" type="password" spellcheck="false" autocomplete="off" placeholder="Only needed for Ollama Cloud" />
+          </label>
+          <p class="field-note">
+            Local: run <code>ollama serve</code>. Cloud: point at <code>https://ollama.com</code> and add an API key.
+          </p>
+        </fieldset>
+
+        <fieldset class="field">
+          <legend>Model</legend>
+          <label class="field-row">
+            <span>Model</span>
+            <input id="input-model" type="text" list="model-options" spellcheck="false" autocomplete="off" placeholder="llama3.1:8b" />
+          </label>
+          <datalist id="model-options"></datalist>
+          <div class="field-row">
+            <span></span>
+            <button id="btn-refresh-models" class="secondary-button" type="button">Fetch models</button>
+          </div>
+          <p id="models-status" class="field-note" hidden></p>
+          <p class="field-note">
+            Tool calling is required. Good picks: <code>qwen3</code>, <code>llama3.1</code>,
+            <code>mistral-nemo</code>, <code>granite3.3</code>.
+          </p>
+        </fieldset>
+
+        <fieldset class="field">
+          <legend>Behavior</legend>
+          <label class="field-row">
+            <span>Temperature</span>
+            <input id="input-temperature" type="number" min="0" max="2" step="0.1" />
+          </label>
+          <label class="field-row">
+            <span>Max tool steps</span>
+            <input id="input-max-steps" type="number" min="1" max="20" step="1" />
+          </label>
+          <label class="check-row">
+            <input id="input-confirm" type="checkbox" />
+            <span>Ask before running JavaScript in a tab</span>
+          </label>
+          <label class="check-row">
+            <input id="input-stream" type="checkbox" />
+            <span>Stream responses</span>
+          </label>
+        </fieldset>
+
+        <fieldset class="field">
+          <legend>System prompt</legend>
+          <textarea id="input-system-prompt" rows="9" spellcheck="false"></textarea>
+          <button id="btn-reset-prompt" class="secondary-button" type="button">Reset to default</button>
+        </fieldset>
+
+        <div class="settings-actions">
+          <button id="btn-save-settings" class="primary-button" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="toast" class="toast" hidden role="status"></div>
+
+    <script src="panel.js"></script>
+  </body>
+</html>

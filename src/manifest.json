@@ -1,0 +1,48 @@
+{
+  "manifest_version": 2,
+  "name": "Brogent",
+  "version": "0.1.0",
+  "description": "An Ollama-powered browser agent: read, summarize, extract from, and modify the page you are on.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "brogent@browser-agent.dev",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent"]
+      }
+    }
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["tabs", "storage", "clipboardWrite", "<all_urls>"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "Open Brogent",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    }
+  },
+  "sidebar_action": {
+    "default_title": "Brogent",
+    "default_panel": "panel.html",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    },
+    "open_at_install": false
+  },
+  "commands": {
+    "_execute_sidebar_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      }
+    }
+  }
+}
