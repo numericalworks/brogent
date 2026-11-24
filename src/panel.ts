@@ -2,6 +2,7 @@ import { copyToClipboard } from "./lib/clipboard";
 import { normalizeBaseUrl } from "./lib/llm/http";
 import { renderMarkdown } from "./lib/markdown";
 import { sanitizeHistory } from "./lib/messages";
+import { ext } from "./lib/platform";
 import type { BackgroundEvent, PanelRequest } from "./lib/protocol";
 import { PORT_NAME } from "./lib/protocol";
 import {
@@ -252,10 +253,26 @@ const itemElements = new WeakMap<UiItem, HTMLElement>();
 
 let port: browser.runtime.Port | null = null;
 let reconnectTimer: number | undefined;
+let keepAliveTimer: number | undefined;
+
+/** Chrome MV3 service workers sleep after ~30s idle; ping while a run is live. */
+function startKeepAlive(): void {
+  stopKeepAlive();
+  keepAliveTimer = window.setInterval(() => {
+    post({ type: "ping" });
+  }, 20_000);
+}
+
+function stopKeepAlive(): void {
+  if (keepAliveTimer !== undefined) {
+    window.clearInterval(keepAliveTimer);
+    keepAliveTimer = undefined;
+  }
+}
 
 function connect(): void {
   try {
-    port = browser.runtime.connect({ name: PORT_NAME });
+    port = ext.runtime.connect({ name: PORT_NAME });
   } catch {
     scheduleReconnect();
     return;
@@ -267,6 +284,7 @@ function connect(): void {
 
   port.onDisconnect.addListener(() => {
     port = null;
+    stopKeepAlive();
     if (state.running) finishRun("Lost the connection to Brogent's background process.");
     scheduleReconnect();
   });
@@ -303,6 +321,7 @@ function handleEvent(event: BackgroundEvent): void {
     if (event.type === "done" || event.type === "error") {
       state.discardRun = false;
       state.running = false;
+      stopKeepAlive();
       sendBtn.disabled = false;
       stopBtn.hidden = true;
       setStatus(null);
@@ -595,6 +614,7 @@ function clearLive(): void {
 }
 
 function finishRun(note?: string): void {
+  stopKeepAlive();
   if (state.liveText.trim()) {
     const content = state.liveText.trim();
     clearLive();
@@ -779,6 +799,7 @@ async function beginRun(): Promise<void> {
 
   // Mark the run before awaiting so a fast double-send cannot start two runs.
   state.running = true;
+  startKeepAlive();
   sendBtn.disabled = true;
   stopBtn.hidden = false;
   updateEmptyState();
@@ -851,8 +872,8 @@ function newChat(): void {
 
 async function getActiveTab(): Promise<browser.tabs.Tab | null> {
   try {
-    let tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (!tabs.length) tabs = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+    let tabs = await ext.tabs.query({ active: true, currentWindow: true });
+    if (!tabs.length) tabs = await ext.tabs.query({ active: true, lastFocusedWindow: true });
     return tabs[0] ?? null;
   } catch {
     return null;
@@ -1097,7 +1118,7 @@ function stashProviderFields(): void {
 }
 
 function persistConfig(): void {
-  void browser.storage.local.set({ [CONFIG_KEY]: state.config }).catch(() => undefined);
+  void ext.storage.local.set({ [CONFIG_KEY]: state.config }).catch(() => undefined);
 }
 
 function setActiveModel(model: string): void {
@@ -1231,7 +1252,7 @@ function persist(): void {
   };
 
   // One key per tab: two windows writing different tabs never clobber each other.
-  void browser.storage.local
+  void ext.storage.local
     .set({ [storageKeyFor(state.tabId)]: payload })
     .catch(() => undefined);
 }
@@ -1273,7 +1294,7 @@ function parseConversation(value: unknown): ConversationRecord | null {
 
 async function loadPersistedState(activeTabId?: number): Promise<void> {
   try {
-    const stored = await browser.storage.local.get(null);
+    const stored = await ext.storage.local.get(null);
     state.config = normalizeConfig(stored[CONFIG_KEY] as Partial<AppConfig> | undefined);
 
     state.conversations = {};
@@ -1288,8 +1309,8 @@ async function loadPersistedState(activeTabId?: number): Promise<void> {
     if (!Object.keys(state.conversations).length && legacy.length && activeTabId != null) {
       const record = { items: legacy, updatedAt: Date.now() };
       state.conversations[tabKey(activeTabId)] = record;
-      void browser.storage.local.set({ [storageKeyFor(activeTabId)]: record }).catch(() => undefined);
-      void browser.storage.local.remove(ITEMS_KEY).catch(() => undefined);
+      void ext.storage.local.set({ [storageKeyFor(activeTabId)]: record }).catch(() => undefined);
+      void ext.storage.local.remove(ITEMS_KEY).catch(() => undefined);
     }
   } catch {
     // Storage may be unavailable; start fresh.
@@ -1305,7 +1326,7 @@ async function loadPersistedState(activeTabId?: number): Promise<void> {
 /** Drops transcripts whose tabs no longer exist (for example after a restart). */
 async function pruneStaleConversations(): Promise<void> {
   try {
-    const tabs = await browser.tabs.query({});
+    const tabs = await ext.tabs.query({});
     const live = new Set(tabs.map((tab) => tabKey(tab.id)));
     const current = tabKey(state.tabId);
     const stale: string[] = [];
@@ -1325,7 +1346,7 @@ async function pruneStaleConversations(): Promise<void> {
       stale.push(`${CONVERSATION_PREFIX}${key}`);
     }
 
-    if (stale.length) await browser.storage.local.remove(stale);
+    if (stale.length) await ext.storage.local.remove(stale);
   } catch {
     // Tab listing is optional; keep what we loaded.
   }
@@ -1387,7 +1408,7 @@ function wireEvents(): void {
     const href = anchor.getAttribute("href") ?? "";
     if (!/^(https?:|mailto:)/i.test(href)) return;
     event.preventDefault();
-    void browser.tabs.create({ url: href });
+    void ext.tabs.create({ url: href });
   });
 
   settingsBtn.addEventListener("click", openSettings);
@@ -1462,15 +1483,15 @@ function wireEvents(): void {
   });
 
   window.addEventListener("focus", () => void syncActiveTab());
-  browser.tabs.onActivated.addListener(() => void syncActiveTab());
-  browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  ext.tabs.onActivated.addListener(() => void syncActiveTab());
+  ext.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
     if (tab.active && (changeInfo.title !== undefined || changeInfo.url !== undefined || changeInfo.status === "complete")) {
       void syncActiveTab();
     }
   });
-  browser.tabs.onRemoved.addListener((tabId) => {
+  ext.tabs.onRemoved.addListener((tabId) => {
     delete state.conversations[String(tabId)];
-    void browser.storage.local.remove(storageKeyFor(tabId)).catch(() => undefined);
+    void ext.storage.local.remove(storageKeyFor(tabId)).catch(() => undefined);
 
     if (state.tabId === tabId && !state.running) {
       // The activation event will select a neighbouring tab; clear the stale view now.

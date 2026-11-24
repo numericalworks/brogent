@@ -3,11 +3,15 @@ import { chatEvents, listModels } from "./lib/llm";
 import { normalizeBaseUrl } from "./lib/llm/http";
 import { sanitizeHistory, trimHistory } from "./lib/messages";
 import {
+  buildChromeEvaluateExpression,
   buildExecuteJobScript,
   buildJobCleanupScript,
   buildJobPollScript,
   buildReadPageScript,
+  parseReadPageOptions,
+  readPageInTab,
 } from "./lib/page-scripts";
+import { chromeApi, ext, isChrome, type ChromeInjectionResult } from "./lib/platform";
 import type { BackgroundEvent, PanelRequest } from "./lib/protocol";
 import { PORT_NAME } from "./lib/protocol";
 import { getProvider, resolveProvider } from "./lib/providers";
@@ -26,13 +30,24 @@ interface Session {
   pendingConfirms: Map<string, (approved: boolean) => void>;
 }
 
-browser.browserAction.onClicked.addListener(() => {
-  void browser.sidebarAction.open();
-});
+if (isChrome) {
+  const openPanelOnActionClick = () => {
+    void chromeApi?.sidePanel
+      ?.setPanelBehavior({ openPanelOnActionClick: true })
+      .catch(() => undefined);
+  };
+  openPanelOnActionClick();
+  ext.runtime.onInstalled.addListener(openPanelOnActionClick);
+  ext.runtime.onStartup.addListener(openPanelOnActionClick);
+} else {
+  ext.browserAction.onClicked.addListener(() => {
+    void ext.sidebarAction.open();
+  });
+}
 
 async function loadConfig(): Promise<AppConfig> {
   try {
-    const stored = await browser.storage.local.get(CONFIG_KEY);
+    const stored = await ext.storage.local.get(CONFIG_KEY);
     return normalizeConfig(stored[CONFIG_KEY] as Partial<AppConfig> | undefined);
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -41,8 +56,8 @@ async function loadConfig(): Promise<AppConfig> {
 
 async function getActiveTab(): Promise<browser.tabs.Tab | null> {
   try {
-    let tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (!tabs.length) tabs = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+    let tabs = await ext.tabs.query({ active: true, currentWindow: true });
+    if (!tabs.length) tabs = await ext.tabs.query({ active: true, lastFocusedWindow: true });
     return tabs[0] ?? null;
   } catch {
     return null;
@@ -70,7 +85,7 @@ function errorText(error: unknown): string {
 function friendlyPageError(error: unknown): string {
   const message = errorText(error);
   if (/Missing host permission|does not have permission|not allowed|not permitted/i.test(message)) {
-    return `${message} Firefox blocks extensions on some pages (about:, addons.mozilla.org, the PDF viewer, and other built-in pages). Open a normal web page and try again.`;
+    return `${message} Browsers block extensions on some pages (about:, chrome://, addons.mozilla.org, the Chrome Web Store, the PDF viewer, and other built-in pages). Open a normal web page and try again.`;
   }
   if (/SyntaxError|parse/i.test(message)) {
     return `The injected script could not be parsed: ${message}`;
@@ -79,7 +94,7 @@ function friendlyPageError(error: unknown): string {
 }
 
 async function inject(tabId: number, code: string): Promise<unknown> {
-  const results = await browser.tabs.executeScript(tabId, { code, runAt: "document_idle" });
+  const results = await ext.tabs.executeScript(tabId, { code, runAt: "document_idle" });
   return Array.isArray(results) ? results[0] : undefined;
 }
 
@@ -97,7 +112,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function readPage(tabId: number, args: Record<string, unknown>): Promise<ToolResult> {
-  const parsed = parseInjected(await inject(tabId, buildReadPageScript(args)));
+  let value: unknown;
+
+  if (isChrome) {
+    const scripting = chromeApi?.scripting;
+    if (!scripting) {
+      return {
+        ok: false,
+        content: JSON.stringify({ ok: false, error: "Chrome's scripting API is unavailable." }),
+      };
+    }
+    const results = await scripting.executeScript({
+      target: { tabId },
+      func: readPageInTab,
+      args: [parseReadPageOptions(args)],
+      world: "ISOLATED",
+    });
+    const first = results[0];
+    if (first?.error) throw new Error(first.error);
+    value = first?.result;
+  } else {
+    value = await inject(tabId, buildReadPageScript(args));
+  }
+
+  const parsed = parseInjected(value);
   if (!isRecord(parsed)) {
     return {
       ok: false,
@@ -132,6 +170,16 @@ async function executeJavascript(
     };
   }
 
+  return isChrome
+    ? executeJavascriptChrome(tabId, code, signal)
+    : executeJavascriptFirefox(tabId, code, signal);
+}
+
+async function executeJavascriptFirefox(
+  tabId: number,
+  code: string,
+  signal: AbortSignal,
+): Promise<ToolResult> {
   const jobKey = `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   await inject(tabId, buildExecuteJobScript(code, jobKey));
 
@@ -174,6 +222,79 @@ async function executeJavascript(
 
     await sleep(delay);
     delay = Math.min(250, Math.round(delay * 1.6));
+  }
+}
+
+function chromeScriptError(error: unknown): string {
+  const message = errorText(error);
+  if (/stopped|abort/i.test(message)) return "The run was stopped.";
+  if (/not enabled|user scripts|permission|access to the script|denied/i.test(message)) {
+    return `Chrome blocked the script. Enable "Allow User Scripts" for Brogent in chrome://extensions → Details (or Developer mode on older Chrome), then try again. (${message})`;
+  }
+  if (/cannot access|chrome:\/\/|webstore|extension gallery|protected/i.test(message)) {
+    return `${message} Chrome extensions cannot run on chrome:// pages, the Chrome Web Store, or other protected pages.`;
+  }
+  return message;
+}
+
+async function executeJavascriptChrome(
+  tabId: number,
+  code: string,
+  signal: AbortSignal,
+): Promise<ToolResult> {
+  const userScripts = chromeApi?.userScripts;
+  if (!userScripts?.execute) {
+    return {
+      ok: false,
+      content: JSON.stringify({
+        ok: false,
+        error:
+          'Chrome\'s User Scripts API is unavailable. Open chrome://extensions, click Details on Brogent, and enable "Allow User Scripts" (Chrome 138+) or Developer mode on older Chrome, then try again.',
+      }),
+    };
+  }
+
+  const expression = buildChromeEvaluateExpression(code);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+
+  try {
+    const execution = userScripts.execute({
+      target: { tabId },
+      js: [{ code: expression }],
+      world: "USER_SCRIPT",
+      injectImmediately: true,
+    });
+
+    const results = await new Promise<ChromeInjectionResult[]>((resolve, reject) => {
+      timer = globalThis.setTimeout(() => {
+        reject(new Error(`The script did not finish within ${SCRIPT_TIMEOUT_MS / 1000} seconds.`));
+      }, SCRIPT_TIMEOUT_MS);
+      onAbort = () => reject(new Error("The run was stopped."));
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+      execution.then(resolve, reject);
+    });
+
+    const first = results[0];
+    if (first?.error) {
+      return { ok: false, content: JSON.stringify({ ok: false, error: first.error }) };
+    }
+    const raw = first?.result;
+    if (raw !== undefined && raw !== null) {
+      const parsed = typeof raw === "string" ? parseInjected(raw) : raw;
+      const content = typeof raw === "string" ? raw : JSON.stringify(raw);
+      return {
+        ok: isRecord(parsed) ? Boolean(parsed.ok) : false,
+        content: truncate(content, MAX_TOOL_CONTENT),
+      };
+    }
+    return { ok: false, content: JSON.stringify({ ok: false, error: "The script returned no result." }) };
+  } catch (error) {
+    return { ok: false, content: JSON.stringify({ ok: false, error: chromeScriptError(error) }) };
+  } finally {
+    if (timer !== undefined) globalThis.clearTimeout(timer);
+    if (onAbort) signal.removeEventListener("abort", onAbort);
   }
 }
 
@@ -264,7 +385,7 @@ async function startChat(session: Session, request: Extract<PanelRequest, { type
     }
 
     const tab =
-      request.tabId != null ? await browser.tabs.get(request.tabId).catch(() => null) : await getActiveTab();
+      request.tabId != null ? await ext.tabs.get(request.tabId).catch(() => null) : await getActiveTab();
     if (!tab || tab.id == null) {
       post(port, {
         type: "error",
@@ -364,7 +485,7 @@ async function handleMessage(session: Session, message: PanelRequest): Promise<v
   }
 }
 
-browser.runtime.onConnect.addListener((port) => {
+ext.runtime.onConnect.addListener((port) => {
   if (port.name !== PORT_NAME) return;
 
   const session: Session = { port, running: false, pendingConfirms: new Map() };

@@ -1,16 +1,18 @@
 /**
- * Builders for the snippets we inject into the page with
- * `browser.tabs.executeScript({ code })`.
+ * Page-side code for reading the DOM and running model-authored JavaScript.
  *
- * Everything here is a plain string: no eval happens in the extension itself,
- * and Firefox injects the code into the page's content-script world.
+ * `readPageInTab` is deliberately self-contained: Firefox injects its source
+ * with `tabs.executeScript({ code })`, while Chrome passes the function to
+ * `scripting.executeScript({ func })`. Chrome's `userScripts.execute()` gets a
+ * compiled string built by `buildChromeEvaluateExpression()`.
  *
- * Injected snippets always return a JSON string so that the result survives
- * structure cloning predictably.
+ * Everything that crosses into a page returns a JSON string so it survives
+ * structured cloning predictably.
  */
 
 const DEFAULT_MAX_CHARS = 12_000;
 const MAX_MAX_CHARS = 50_000;
+const MAX_RESULT_CHARS = 45_000;
 
 function clampInt(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
@@ -38,34 +40,50 @@ export function parseReadPageOptions(args: Record<string, unknown>): ReadPageOpt
   };
 }
 
-/** Reads the page synchronously; returns `{ ok, url, title, mode, content, ... }`. */
-export function buildReadPageScript(args: Record<string, unknown>): string {
-  const options = parseReadPageOptions(args);
-  return `(() => {
-  const options = ${JSON.stringify(options)};
+/**
+ * Reads the page synchronously and returns a JSON string.
+ *
+ * Keep this function self-contained: it is serialized and injected into a tab.
+ * It must not reference module-level helpers or constants.
+ */
+export function readPageInTab(options: ReadPageOptions): string {
+  const doc = document;
   try {
-    const root = options.selector ? document.querySelector(options.selector) : document.body || document.documentElement;
+    const root = (options.selector
+      ? doc.querySelector(options.selector)
+      : doc.body || doc.documentElement) as HTMLElement | null;
+
     if (!root) {
       return JSON.stringify({ ok: false, error: "No element matches selector: " + options.selector });
     }
-    const selection = (window.getSelection && window.getSelection() && window.getSelection().toString()) || "";
+
+    const currentSelection = window.getSelection ? window.getSelection() : null;
+    const selection = currentSelection ? currentSelection.toString() : "";
+    const descriptionElement = doc.querySelector('meta[name="description"]') as HTMLMetaElement | null;
     const meta = {
       url: location.href,
-      title: document.title,
-      description: (document.querySelector('meta[name="description"]') || {}).content || "",
+      title: doc.title,
+      description: descriptionElement ? descriptionElement.content : "",
       mode: options.mode,
       selector: options.selector || null,
-      selection: selection.slice(0, 2000)
+      selection: selection.slice(0, 2000),
     };
+
     let content = "";
-    let count = undefined;
+    let count: number | undefined;
 
     if (options.mode === "text") {
-      const raw = root.innerText !== undefined && root.innerText !== null ? root.innerText : (root.textContent || "");
-      content = raw.replace(/\\u00a0/g, " ").replace(/[ \\t]+\\n/g, "\\n").replace(/\\n{3,}/g, "\\n\\n").trim();
+      const raw = typeof root.innerText === "string" ? root.innerText : root.textContent || "";
+      content = raw
+        .replace(/\u00a0/g, " ")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
     } else if (options.mode === "html") {
-      const clone = root.cloneNode(true);
-      clone.querySelectorAll("script,style,noscript,template,iframe,svg,link,meta").forEach((node) => node.remove());
+      const clone = root.cloneNode(true) as HTMLElement;
+      clone
+        .querySelectorAll("script,style,noscript,template,iframe,svg,link,meta")
+        .forEach((node) => node.remove());
       clone.querySelectorAll("*").forEach((element) => {
         for (const attribute of Array.from(element.attributes)) {
           const name = attribute.name.toLowerCase();
@@ -78,25 +96,27 @@ export function buildReadPageScript(args: Record<string, unknown>): string {
       });
       content = clone.outerHTML || clone.innerHTML || "";
     } else if (options.mode === "links") {
-      const seen = new Set();
-      const lines = [];
+      const seen = new Set<string>();
+      const lines: string[] = [];
       root.querySelectorAll("a[href]").forEach((anchor) => {
-        const href = anchor.href;
+        const link = anchor as HTMLAnchorElement;
+        const href = link.href;
         if (!href || /^javascript:/i.test(href) || seen.has(href)) return;
         seen.add(href);
-        const text = (anchor.innerText || anchor.textContent || "").replace(/\\s+/g, " ").trim();
+        const text = (link.innerText || link.textContent || "").replace(/\s+/g, " ").trim();
         lines.push("- " + (text ? text.slice(0, 160) : "(no text)") + " — " + href);
       });
       count = lines.length;
-      content = lines.join("\\n");
+      content = lines.join("\n");
     } else if (options.mode === "outline") {
-      const lines = [];
+      const lines: string[] = [];
       root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((heading) => {
-        const text = (heading.innerText || heading.textContent || "").replace(/\\s+/g, " ").trim();
-        if (text) lines.push("[" + heading.tagName + "] " + text);
+        const element = heading as HTMLElement;
+        const text = (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim();
+        if (text) lines.push("[" + element.tagName + "] " + text);
       });
       count = lines.length;
-      content = lines.join("\\n");
+      content = lines.join("\n");
     } else if (options.mode === "selection") {
       content = selection;
     } else {
@@ -118,49 +138,24 @@ export function buildReadPageScript(args: Record<string, unknown>): string {
       count,
       truncated,
       totalChars,
-      content
+      content,
     });
   } catch (error) {
-    return JSON.stringify({ ok: false, error: String((error && error.stack) || error).slice(0, 2000) });
+    return JSON.stringify({
+      ok: false,
+      error: String((error as Error)?.stack || error).slice(0, 2000),
+    });
   }
-})()`;
 }
 
-/**
- * Starts an async job and returns immediately. The job's outcome is stored on
- * the content-script `window` so `buildJobPollScript` can read it later; this
- * avoids depending on how `executeScript` handles returned promises.
- */
-export function buildExecuteJobScript(code: string, jobKey: string): string {
-  return `(() => {
-  const store = window.__brogentJobs || (window.__brogentJobs = {});
-  store[${JSON.stringify(jobKey)}] = { status: "running" };
-  const key = ${JSON.stringify(jobKey)};
-  const finish = (payload) => {
-    if (payload && payload.ok && payload.result !== undefined) {
-      let size = 0;
-      try { size = JSON.stringify(payload.result).length; } catch (error) { size = Infinity; }
-      if (size > 45000) {
-        payload = {
-          ok: false,
-          error: "The value was " + size + " characters when serialized, which is too large to pass back. Return a smaller value, a summary, or a subset."
-        };
-      }
-    }
-    store[key] = Object.assign({ status: "done" }, payload);
-  };
-  try {
-    Promise.resolve((async () => {
-${code}
-    })()).then(
-      (value) => finish({ ok: true, result: __brogentSerialize(value) }),
-      (error) => finish({ ok: false, error: __brogentError(error) })
-    );
-  } catch (error) {
-    finish({ ok: false, error: __brogentError(error) });
-  }
-  return true;
+/** Firefox path: inject the reader's source into the tab. */
+export function buildReadPageScript(args: Record<string, unknown>): string {
+  const options = parseReadPageOptions(args);
+  return `(${readPageInTab.toString()})(${JSON.stringify(options)})`;
+}
 
+/** Helpers shared by the Firefox job runner and Chrome's user-script runner. */
+const PAGE_RUNTIME_HELPERS = `
   function __brogentError(error) {
     const text = String((error && error.stack) || (error && error.message) || error);
     return text.slice(0, 4000);
@@ -233,6 +228,67 @@ ${code}
     }
     return String(value);
   }
+`;
+
+const TOO_LARGE_MESSAGE =
+  '"The value was " + size + " characters when serialized, which is too large to pass back. Return a smaller value, a summary, or a subset."';
+
+/**
+ * Starts an async job and returns immediately. The job's outcome is stored on
+ * the content-script `window` so `buildJobPollScript` can read it later; this
+ * avoids depending on how `executeScript` handles returned promises.
+ */
+export function buildExecuteJobScript(code: string, jobKey: string): string {
+  return `(() => {
+  const store = window.__brogentJobs || (window.__brogentJobs = {});
+  store[${JSON.stringify(jobKey)}] = { status: "running" };
+  const key = ${JSON.stringify(jobKey)};
+  const finish = (payload) => {
+    if (payload && payload.ok && payload.result !== undefined) {
+      let size = 0;
+      try { size = JSON.stringify(payload.result).length; } catch (error) { size = Infinity; }
+      if (size > ${MAX_RESULT_CHARS}) {
+        payload = { ok: false, error: ${TOO_LARGE_MESSAGE} };
+      }
+    }
+    store[key] = Object.assign({ status: "done" }, payload);
+  };
+  try {
+    Promise.resolve((async () => {
+${code}
+    })()).then(
+      (value) => finish({ ok: true, result: __brogentSerialize(value) }),
+      (error) => finish({ ok: false, error: __brogentError(error) })
+    );
+  } catch (error) {
+    finish({ ok: false, error: __brogentError(error) });
+  }
+  return true;
+${PAGE_RUNTIME_HELPERS}
+})()`;
+}
+
+/**
+ * Chrome path: a compiled async expression for `userScripts.execute()`.
+ * The API awaits the returned promise and hands back the JSON string.
+ */
+export function buildChromeEvaluateExpression(code: string): string {
+  return `(async () => {
+  try {
+    const value = await (async () => {
+${code}
+    })();
+    const result = __brogentSerialize(value);
+    let size = 0;
+    try { size = JSON.stringify(result).length; } catch (error) { size = Infinity; }
+    if (size > ${MAX_RESULT_CHARS}) {
+      return JSON.stringify({ ok: false, error: ${TOO_LARGE_MESSAGE} });
+    }
+    return JSON.stringify({ ok: true, result });
+  } catch (error) {
+    return JSON.stringify({ ok: false, error: __brogentError(error) });
+  }
+${PAGE_RUNTIME_HELPERS}
 })()`;
 }
 

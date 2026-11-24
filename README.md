@@ -41,18 +41,20 @@ Everything is driven from a sidebar chat, with streamed answers, tool-call cards
 
 ## Requirements
 
-- **Firefox 142+** (desktop)
+- **Firefox 142+** or **Chrome 135+** (desktop)
 - **[Bun](https://bun.sh) 1.1+** to build and test
 - A **tool-calling model** from one of the supported providers (see below)
 
-## Quick start
+## Build and install
+
+The same source builds both extensions: the Firefox build is Manifest V2, the Chrome build is Manifest V3.
 
 ```sh
 bun install
-bun run build
+bun run build:all     # dist/ (Firefox) and dist-chrome/ (Chrome)
 ```
 
-Then in Firefox:
+### Firefox
 
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on…** and pick `dist/manifest.json`.
@@ -60,17 +62,33 @@ Then in Firefox:
 4. Click the gear icon, choose a **Provider**, paste an **API key** if needed, and press **Fetch models**.
 5. Pick a model, press **Save**, and ask something like *"Summarize this page in five bullets."*
 
+Reload the temporary add-on after rebuilding.
+
+### Chrome
+
+1. Run `bun run build:chrome` (or `bun run build:all`).
+2. Open `chrome://extensions` and enable **Developer mode**.
+3. Click **Load unpacked** and select the `dist-chrome/` folder.
+4. Click the Brogent toolbar icon to open the side panel.
+5. Configure a provider and model exactly as in Firefox.
+
+For `execute_javascript` on Chrome, enable **Allow User Scripts** on the extension's Details page (Chrome 138+). On Chrome 135–137, enable **Developer mode** instead. `read_page` works without that toggle.
+
+### Build and package commands
+
+| Command | Result |
+| --- | --- |
+| `bun run build` / `build:firefox` | `dist/` — Firefox MV2 |
+| `bun run build:chrome` | `dist-chrome/` — Chrome MV3 |
+| `bun run build:all` | both builds |
+| `bun run package` | `brogent.xpi` |
+| `bun run package:chrome` | `brogent-chrome.zip` |
+| `bun run package:all` | both packages |
+| `bun run dev:firefox` | build + launch a temporary Firefox profile |
+
+`about:addons` → gear icon → **Install Add-on From File…** works for unsigned Firefox installs when `xpinstall.signatures.required` is `false` in `about:config`. For Chrome, load `dist-chrome/` unpacked, or upload `brogent-chrome.zip` to the Chrome Web Store.
+
 The first model in the fetched list is selected automatically when you have not chosen one yet, so a fresh provider is ready to chat as soon as the list loads.
-
-Reload the temporary add-on after rebuilding (`bun run build`).
-
-To produce an installable/unsigned package:
-
-```sh
-bun run package   # writes brogent.xpi
-```
-
-`about:addons` → gear icon → **Install Add-on From File…** works for unsigned local installs when `xpinstall.signatures.required` is `false` in `about:config`.
 
 ## Providers
 
@@ -170,11 +188,11 @@ Chat history is saved per tab in `browser.storage.local`, so closing the sidebar
 ## Development
 
 ```sh
-bun run build       # bundle + copy static files + generate icons into dist/
-bun run watch       # rebuild on changes in src/ and scripts/
+bun run build:all   # build both extensions (dist/ and dist-chrome/)
+bun run watch       # rebuild the selected target(s) on changes
 bun run typecheck   # tsc --noEmit
 bun test            # unit tests (adapters, agent loop, history repair, injected scripts)
-bun run package     # build without sourcemaps and produce brogent.xpi
+bun run package:all # build without sourcemaps and package both
 bun run dev:firefox # build, then launch Firefox with web-ext (downloads web-ext on first use)
 ```
 
@@ -183,13 +201,16 @@ bun run dev:firefox # build, then launch Firefox with web-ext (downloads web-ext
 ```
 src/
   background.ts          agent session, tool execution, provider dispatch
-  panel.html/.css/.ts    sidebar UI, per-tab transcripts, provider settings, streaming renderer
-  manifest.json          Manifest V2 for Firefox
+  panel.html/.css/.ts    sidebar/side-panel UI, per-tab transcripts, provider settings, streaming
+  manifest.firefox.json  Manifest V2 for Firefox
+  manifest.chrome.json   Manifest V3 for Chrome
+  icons/                 16/32/48/96/128 px extension icons (from assets/logo.webp)
   lib/
+    platform.ts          browser shim, manifest-version detection, Chrome API types
     agent.ts             the model ↔ tool loop (framework-free, unit tested)
     providers.ts         provider registry, defaults, per-provider resolution
     tools.ts             tool schemas and UI labels
-    page-scripts.ts      the exact strings injected with tabs.executeScript
+    page-scripts.ts      page reader + JS runners for Firefox and Chrome
     markdown.ts          small safe Markdown → DOM renderer
     messages.ts          repairs/trims tool-call history
     protocol.ts          typed port messages between panel and background
@@ -202,26 +223,33 @@ src/
       gemini.ts          generateContent + function calling
       http.ts            shared streaming, errors, tool-call normalization
       types.ts           normalized ChatEvent / ChatRequest shapes
+assets/
+  logo.webp              source artwork for the icons
 scripts/
-  zip.ts                 minimal ZIP writer for the .xpi
-  package.ts             packages dist/ into brogent.xpi
+  zip.ts                 minimal ZIP writer for .xpi and Chrome .zip packages
+  package.ts             packages dist/ or dist-chrome/
 tests/                   bun:test suites
 ```
 
 Each adapter translates our normalized transcript into its provider's shape and back, so the agent loop, UI, and stored history are provider-agnostic. Adding a provider usually means one registry entry; a new protocol means one adapter.
 
-### Why Manifest V2?
+### Why Manifest V2 for Firefox, MV3 for Chrome?
 
-Arbitrary, model-authored JavaScript in a tab needs `tabs.executeScript({ code })`. Manifest V3 removed the `code` option, and its extension CSP forbids `eval`/`new Function`, so there is no faithful MV3 equivalent for a user-directed agent. Firefox continues to support MV2 background pages. The agent loop, provider adapters, tools, and page scripts are all isolated from the extension plumbing, so an MV3 port would only need a different injection/transport layer.
+Running model-authored JavaScript in a tab needs a runner that is not limited to packaged files:
+
+- **Firefox** uses `tabs.executeScript({ code })`, which Firefox's MV2 support still provides. A small job/poll protocol handles async scripts and lets **Stop** cancel a run.
+- **Chrome** is MV3-only and removed `executeScript({ code })`; `eval`/`new Function` are blocked by the extension CSP. The Chrome build uses the sanctioned [`userScripts`](https://developer.chrome.com/docs/extensions/reference/api/userScripts) API (`userScripts.execute({ js: [{ code }] })`), which compiles the code in an isolated world and awaits promises. Chrome requires the user to allow user scripts for the extension.
+
+The shared agent loop, provider adapters, tools, UI, and history are identical. Only `src/lib/platform.ts`, the tool runners in `background.ts`, the two manifests, and the sidebar/side-panel wiring differ. The MV3 service worker can be suspended while idle, so the panel pings the background every 20 seconds during a run; `read_page` uses `scripting.executeScript` on Chrome and works without the user-scripts toggle.
 
 ## Privacy and security
 
 - **No telemetry, no developer backend.** Brogent ships no analytics and has no server of its own.
-- **Who sees your pages:** whatever `read_page` returns, your prompts, and tool results are sent to the **provider you select**. With a local provider (Ollama, LM Studio, llama.cpp) that stays on your machine; with a cloud provider it is sent to that company under their terms. The add-on's Firefox data-collection declaration lists `websiteContent` for this reason.
+- **Who sees your pages:** whatever `read_page` returns, your prompts, and tool results are sent to the **provider you select**. With a local provider (Ollama, LM Studio, llama.cpp) that stays on your machine; with a cloud provider it is sent to that company under their terms. The Firefox build declares `websiteContent` for this reason; the Chrome build sends the same data to the provider you choose.
 - **API keys** are stored unencrypted in the extension's local storage, like chat history.
 - **Script confirmation is on by default.** Model output is untrusted: review the code before pressing **Run**, especially on pages that hold sensitive data.
-- **Injection is limited to the browser's normal permission model.** Brogent cannot script `about:` pages, `addons.mozilla.org`, the built-in PDF viewer, or other protected pages.
-- Chat history is stored unencrypted in the extension's local storage and is visible to anyone with access to your Firefox profile.
+- **Injection is limited to the browser's normal permission model.** Brogent cannot script `about:` or `chrome://` pages, `addons.mozilla.org`, the Chrome Web Store, the built-in PDF viewer, or other protected pages.
+- Chat history is stored unencrypted in the extension's local storage and is visible to anyone with access to your browser profile.
 
 ## Limitations
 
@@ -233,6 +261,8 @@ Arbitrary, model-authored JavaScript in a tab needs `tabs.executeScript({ code }
 - Some reasoning models reject `temperature`; the OpenAI adapter retries once without it.
 - Streaming with tools depends on the provider. If a model misbehaves, turn **Stream responses** off.
 - One run at a time; the sidebar is pinned to the running tab until it finishes.
+- Chrome's `execute_javascript` requires the extension's **Allow User Scripts** toggle (Chrome 138+) or Developer mode (Chrome 135–137).
+- The Chrome build targets Chrome 135+ and MV3. Chrome Web Store review may scrutinize extensions that execute model-provided code, so the Chrome build is best suited to unpacked/local use.
 - No cross-tab memory or scheduled automation yet.
 
 ## Ideas / next steps
@@ -243,7 +273,7 @@ Arbitrary, model-authored JavaScript in a tab needs `tabs.executeScript({ code }
 - Screenshot + vision models via `tabs.captureTab`.
 - An `open_url` tool and multi-tab workflows.
 - Per-site permission presets and a read-only mode.
-- MV3 transport behind the same `agent.ts` loop.
+- Publish signed Firefox and Chrome builds, and document store-review notes for dynamic code execution.
 
 ## Donate
 

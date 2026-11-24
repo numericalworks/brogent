@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildChromeEvaluateExpression,
   buildExecuteJobScript,
   buildJobCleanupScript,
   buildJobPollScript,
@@ -183,5 +184,36 @@ describe("execute_javascript job scripts", () => {
     run(buildJobCleanupScript(key), { window });
 
     expect(String(run(buildJobPollScript(key), { window }))).toBe("");
+  });
+});
+
+async function runExpression(code: string, globals: Record<string, unknown> = {}): Promise<unknown> {
+  const expression = buildChromeEvaluateExpression(code);
+  const names = Object.keys(globals);
+  const values = names.map((name) => globals[name]);
+  const fn = new Function(...names, `return ${expression}`);
+  return fn(...values);
+}
+
+describe("buildChromeEvaluateExpression", () => {
+  test("returns a JSON success payload", async () => {
+    const raw = await runExpression("return { answer: 42, list: [1, 2] };");
+    expect(JSON.parse(String(raw))).toEqual({ ok: true, result: { answer: 42, list: [1, 2] } });
+  });
+
+  test("awaits promises", async () => {
+    const raw = await runExpression('return await Promise.resolve("hi");');
+    expect(JSON.parse(String(raw))).toEqual({ ok: true, result: "hi" });
+  });
+
+  test("reports thrown errors", async () => {
+    const parsed = JSON.parse(String(await runExpression('throw new Error("boom");')));
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error).toContain("boom");
+  });
+
+  test("serializes cycles", async () => {
+    const raw = await runExpression("const a = { x: 1 }; a.self = a; return a;");
+    expect(JSON.parse(String(raw))).toEqual({ ok: true, result: { x: 1, self: "[Circular]" } });
   });
 });
