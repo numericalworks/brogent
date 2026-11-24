@@ -245,3 +245,20 @@ Arbitrary, model-authored JavaScript in a tab needs `tabs.executeScript({ code }
 - An `open_url` tool and multi-tab workflows.
 - Per-site permission presets and a read-only mode.
 - MV3 transport behind the same `agent.ts` loop.
+
+## Donate
+
+Brogent is free to use and developed in the open. If it saves you time, you can
+support the project with a one-off donation via
+[PayPal](https://paypal.me/mindaslab).
+
+## License
+
+Brogent is free software: you can redistribute it and/or modify it under the
+terms of the **GNU General Public License, version 3 or (at your option) any
+later version** (GPL-3.0-or-later).
+
+It is distributed in the hope that it will be useful, but **without any
+warranty**; without even the implied warranty of merchantability or fitness for
+a particular purpose. See the
+[GNU GPL v3 text](https://www.gnu.org/licenses/gpl-3.0.html) for the full terms.
