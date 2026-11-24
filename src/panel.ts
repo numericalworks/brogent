@@ -25,6 +25,12 @@ import {
   type ToolCall,
 } from "./lib/types";
 
+/** Conversations live per browser tab, keyed by tab id for the session. */
+const CONVERSATION_PREFIX = "brogent:conversation:";
+const ORPHAN_KEY = "none";
+const MAX_CONVERSATIONS = 30;
+const MAX_ITEMS_PER_TAB = 60;
+
 /* ------------------------------------------------------------------ DOM */
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -117,23 +123,36 @@ interface NoteItem {
 
 type UiItem = UserItem | AssistantItem | ToolItem | ConfirmItem | ErrorItem | NoteItem;
 
-interface State {
+interface ConversationRecord {
   items: UiItem[];
+  updatedAt: number;
+}
+
+interface State {
+  /** The transcript currently shown in the sidebar. */
+  items: UiItem[];
+  /** Per-tab transcripts, keyed by tab id (or ORPHAN_KEY). */
+  conversations: Record<string, ConversationRecord>;
+  /** The tab this transcript belongs to. */
+  tabId?: number;
   config: AppConfig;
   models: string[];
   running: boolean;
+  /** False until persisted state has been loaded and the first tab selected. */
+  initialized: boolean;
   /** Set when the user starts a new chat while a run is finishing. */
   discardRun: boolean;
   live: HTMLElement | null;
   liveText: string;
-  targetTabId?: number;
 }
 
 const state: State = {
   items: [],
+  conversations: {},
   config: { ...DEFAULT_CONFIG },
   models: [],
   running: false,
+  initialized: false,
   discardRun: false,
   live: null,
   liveText: "",
@@ -201,6 +220,7 @@ function handleEvent(event: BackgroundEvent): void {
       setStatus(null);
       clearLive();
       updateEmptyState();
+      void syncActiveTab();
     }
     return;
   }
@@ -381,6 +401,21 @@ function updateEmptyState(): void {
   messagesEl.hidden = state.items.length === 0 && !state.live;
 }
 
+/** Redraws the whole transcript for the selected tab. */
+function renderCurrentConversation(): void {
+  clearLive();
+  messagesEl.replaceChildren();
+  for (const item of state.items) {
+    try {
+      renderItem(item, false);
+    } catch {
+      // Ignore malformed entries left in storage by an older version.
+    }
+  }
+  updateEmptyState();
+  scrollToBottom(true);
+}
+
 function appendItem(item: UiItem, animate = false): void {
   const stick = isNearBottom();
   state.items.push(item);
@@ -478,7 +513,7 @@ function finishRun(note?: string): void {
   setStatus(null);
   updateEmptyState();
   persist();
-  void refreshTarget();
+  void syncActiveTab();
 }
 
 /* -------------------------------------------------------------- tool UI */
@@ -654,11 +689,24 @@ async function beginRun(): Promise<void> {
   updateEmptyState();
   setStatus("Thinking…");
 
-  const tab = await getActiveTab();
-  state.targetTabId = tab?.id;
-  updateTargetBar(tab);
+  let tabId = state.tabId;
+  if (tabId == null) {
+    const active = await getActiveTab();
+    tabId = active?.id;
+    if (active && tabId != null) {
+      // Adopt an orphaned transcript onto the first tab we can see.
+      const orphan = state.conversations[ORPHAN_KEY];
+      const key = tabKey(tabId);
+      if (orphan && orphan.items === state.items && !state.conversations[key]) {
+        state.conversations[key] = { items: orphan.items, updatedAt: Date.now() };
+        delete state.conversations[ORPHAN_KEY];
+      }
+      state.tabId = tabId;
+      updateTargetBar(active);
+    }
+  }
 
-  const ok = post({ type: "chat", messages, tabId: state.targetTabId });
+  const ok = post({ type: "chat", messages, tabId });
   if (!ok) {
     appendItem({ kind: "error", message: "Could not reach the background process." }, true);
     finishRun();
@@ -689,6 +737,7 @@ function newChat(): void {
 
   clearLive();
   state.items = [];
+  ensureConversation(state.tabId).items = state.items;
   messagesEl.replaceChildren();
 
   if (!wasRunning) {
@@ -734,11 +783,51 @@ function updateTargetBar(tab: browser.tabs.Tab | null): void {
   }
 }
 
-async function refreshTarget(): Promise<void> {
+function tabKey(tabId: number | undefined): string {
+  return tabId != null ? String(tabId) : ORPHAN_KEY;
+}
+
+function storageKeyFor(tabId: number | undefined): string {
+  return `${CONVERSATION_PREFIX}${tabKey(tabId)}`;
+}
+
+function ensureConversation(tabId: number | undefined): ConversationRecord {
+  const key = tabKey(tabId);
+  let record = state.conversations[key];
+  if (!record) {
+    record = { items: [], updatedAt: Date.now() };
+    state.conversations[key] = record;
+  }
+  return record;
+}
+
+/**
+ * Shows the transcript for `tab`. While a run is active the sidebar stays
+ * pinned to the tab being worked on, because tool events belong to it.
+ */
+function selectTab(tab: browser.tabs.Tab | null): void {
+  const nextId = tab?.id;
+  const key = tabKey(nextId);
+  const existing = state.conversations[key];
+
+  if (nextId === state.tabId && existing && existing.items === state.items) {
+    updateTargetBar(tab);
+    return;
+  }
   if (state.running) return;
-  const tab = await getActiveTab();
-  state.targetTabId = tab?.id;
+
+  state.tabId = nextId;
+  const record = existing ?? ensureConversation(nextId);
+  state.items = record.items;
   updateTargetBar(tab);
+  renderCurrentConversation();
+}
+
+/** Follows the active tab of this window unless a run is pinned. */
+async function syncActiveTab(): Promise<void> {
+  const tab = await getActiveTab();
+  if (!state.initialized || state.running) return;
+  selectTab(tab);
 }
 
 /* ------------------------------------------------------------ settings */
@@ -954,8 +1043,19 @@ function compactItem(item: UiItem): UiItem {
 }
 
 function persist(): void {
-  const items = state.items.slice(-80).map(compactItem);
-  void browser.storage.local.set({ [ITEMS_KEY]: items }).catch(() => undefined);
+  const record = ensureConversation(state.tabId);
+  if (record.items !== state.items) record.items = state.items;
+  record.updatedAt = Date.now();
+
+  const payload = {
+    updatedAt: record.updatedAt,
+    items: record.items.slice(-MAX_ITEMS_PER_TAB).map(compactItem),
+  };
+
+  // One key per tab: two windows writing different tabs never clobber each other.
+  void browser.storage.local
+    .set({ [storageKeyFor(state.tabId)]: payload })
+    .catch(() => undefined);
 }
 
 function isStoredItem(value: unknown): value is UiItem {
@@ -984,27 +1084,73 @@ function restoreItems(value: unknown): UiItem[] {
   return items;
 }
 
-async function loadPersistedState(): Promise<void> {
+function parseConversation(value: unknown): ConversationRecord | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as { items?: unknown; updatedAt?: unknown };
+  return {
+    items: restoreItems(record.items),
+    updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : Date.now(),
+  };
+}
+
+async function loadPersistedState(activeTabId?: number): Promise<void> {
   try {
-    const stored = await browser.storage.local.get([CONFIG_KEY, ITEMS_KEY]);
+    const stored = await browser.storage.local.get(null);
     state.config = normalizeConfig(stored[CONFIG_KEY] as Partial<AppConfig> | undefined);
-    state.items = restoreItems(stored[ITEMS_KEY]);
+
+    state.conversations = {};
+    for (const [key, value] of Object.entries(stored)) {
+      if (!key.startsWith(CONVERSATION_PREFIX)) continue;
+      const record = parseConversation(value);
+      if (record) state.conversations[key.slice(CONVERSATION_PREFIX.length)] = record;
+    }
+
+    // One-time migration from the single-conversation format.
+    const legacy = restoreItems(stored[ITEMS_KEY]);
+    if (!Object.keys(state.conversations).length && legacy.length && activeTabId != null) {
+      const record = { items: legacy, updatedAt: Date.now() };
+      state.conversations[tabKey(activeTabId)] = record;
+      void browser.storage.local.set({ [storageKeyFor(activeTabId)]: record }).catch(() => undefined);
+      void browser.storage.local.remove(ITEMS_KEY).catch(() => undefined);
+    }
   } catch {
     // Storage may be unavailable; start fresh.
   }
 
+  state.tabId = activeTabId;
+  state.items = ensureConversation(activeTabId).items;
+
   fillSettingsForm(state.config);
   updateModelSelect();
+}
 
-  for (const item of state.items) {
-    try {
-      renderItem(item, false);
-    } catch {
-      // Ignore malformed entries left in storage by an older version.
+/** Drops transcripts whose tabs no longer exist (for example after a restart). */
+async function pruneStaleConversations(): Promise<void> {
+  try {
+    const tabs = await browser.tabs.query({});
+    const live = new Set(tabs.map((tab) => tabKey(tab.id)));
+    const current = tabKey(state.tabId);
+    const stale: string[] = [];
+
+    for (const key of Object.keys(state.conversations)) {
+      if (key === ORPHAN_KEY || key === current || live.has(key)) continue;
+      delete state.conversations[key];
+      stale.push(`${CONVERSATION_PREFIX}${key}`);
     }
+
+    // Keep storage bounded even if many tabs had a conversation.
+    const rest = Object.entries(state.conversations)
+      .filter(([key]) => key !== current && key !== ORPHAN_KEY)
+      .sort(([, a], [, b]) => b.updatedAt - a.updatedAt);
+    for (const [key] of rest.slice(MAX_CONVERSATIONS)) {
+      delete state.conversations[key];
+      stale.push(`${CONVERSATION_PREFIX}${key}`);
+    }
+
+    if (stale.length) await browser.storage.local.remove(stale);
+  } catch {
+    // Tab listing is optional; keep what we loaded.
   }
-  updateEmptyState();
-  scrollToBottom(true);
 }
 
 /* ---------------------------------------------------------------- toast */
@@ -1032,7 +1178,13 @@ function wireEvents(): void {
   sendBtn.addEventListener("click", send);
   stopBtn.addEventListener("click", stop);
   newBtn.addEventListener("click", newChat);
-  refreshTargetBtn.addEventListener("click", () => void refreshTarget());
+  refreshTargetBtn.addEventListener("click", () => {
+    if (state.running) {
+      showToast("Brogent is still working on this tab.");
+      return;
+    }
+    void syncActiveTab();
+  });
 
   inputEl.addEventListener("input", autoGrow);
   inputEl.addEventListener("keydown", (event) => {
@@ -1098,11 +1250,25 @@ function wireEvents(): void {
     toggleKeyBtn.textContent = showing ? "Show" : "Hide";
   });
 
-  window.addEventListener("focus", () => void refreshTarget());
-  browser.tabs.onActivated.addListener(() => void refreshTarget());
+  window.addEventListener("focus", () => void syncActiveTab());
+  browser.tabs.onActivated.addListener(() => void syncActiveTab());
   browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
     if (tab.active && (changeInfo.title !== undefined || changeInfo.url !== undefined || changeInfo.status === "complete")) {
-      void refreshTarget();
+      void syncActiveTab();
+    }
+  });
+  browser.tabs.onRemoved.addListener((tabId) => {
+    delete state.conversations[String(tabId)];
+    void browser.storage.local.remove(storageKeyFor(tabId)).catch(() => undefined);
+
+    if (state.tabId === tabId && !state.running) {
+      // The activation event will select a neighbouring tab; clear the stale view now.
+      state.tabId = undefined;
+      state.items = [];
+      messagesEl.replaceChildren();
+      updateTargetBar(null);
+      updateEmptyState();
+      persist();
     }
   });
 }
@@ -1110,8 +1276,14 @@ function wireEvents(): void {
 async function init(): Promise<void> {
   buildProviderOptions();
   wireEvents();
-  await loadPersistedState();
-  await refreshTarget();
+  const activeTab = await getActiveTab();
+  await loadPersistedState(activeTab?.id);
+  updateTargetBar(activeTab);
+  renderCurrentConversation();
+  await pruneStaleConversations();
+  state.initialized = true;
+  // Catch a tab switch that happened while we were loading.
+  await syncActiveTab();
   connect();
   autoGrow();
   inputEl.focus();

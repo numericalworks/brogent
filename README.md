@@ -10,6 +10,7 @@ Brogent has no backend. It talks directly from your browser to the provider you 
 
 - **Read the current tab.** The model gets the page's visible text, cleaned HTML, all links, the heading outline, or your current selection.
 - **Run JavaScript in the tab.** Precise extraction and page changes are done by writing DOM code that runs in the page and returns JSON.
+- **Keep a conversation per tab.** Switch tabs and the sidebar switches to that tab's transcript. Each tab's agent history targets that tab's page.
 - **Summarize, extract, modify.** Summaries, tables of extracted data, translations, dark mode, readability tweaks, removing clutter — anything expressible as read + script.
 - **Use the model you already pay for.** Ollama, OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, xAI, OpenRouter, Together, Fireworks, Cerebras, Moonshot, Qwen, or any OpenAI-compatible endpoint.
 - **Stay in control.** By default Brogent asks before running model-authored JavaScript, and every script is shown to you first.
@@ -122,6 +123,18 @@ Brogent's agent loop depends on function calling. Models without it cannot use t
 - Gemini: `gemini-2.5-pro`, `gemini-2.5-flash`
 - OpenRouter: any model whose listing includes the `tools` parameter
 
+## Per-tab conversations
+
+Every browser tab has its own transcript and its own agent context:
+
+- Switching tabs switches the sidebar to that tab's conversation. New chats start empty, so a second tab never inherits the first tab's history.
+- The **target tab** is shown above the conversation (title, favicon, ⟳ to re-read the active tab). Send and tool calls always target the displayed tab, even if you switch tabs mid-run.
+- While a run is in progress the sidebar stays **pinned** to the running tab so streamed text and tool results land in the right transcript. When the run finishes (or you press Stop), the sidebar follows the active tab again.
+- **＋** clears only the current tab's conversation.
+- Closing a tab discards its transcript. Tab ids are per-session, so transcripts are also pruned after a browser restart rather than being attached to unrelated new tabs. Navigating within the same tab keeps the conversation.
+
+Transcripts are stored one key per tab in `browser.storage.local`, so several sidebar windows do not overwrite each other's history.
+
 ## Tools
 
 The model can call two tools. They target whichever tab was active when you pressed **Send** (the target tab is shown above the conversation and can be re-read with ⟳).
@@ -147,7 +160,7 @@ The model can call two tools. They target whichever tab was active when you pres
 | Stream responses | on | Turn off if a provider dislikes streaming with tools. |
 | System prompt | built in | Edit it to change the agent's behavior or add house rules. |
 
-Chat history (including tool calls) is saved in `browser.storage.local`, so closing the sidebar does not lose the conversation, and switching providers mid-conversation preserves it.
+Chat history is saved per tab in `browser.storage.local`, so closing the sidebar does not lose it, and switching providers mid-conversation preserves it.
 
 ## Development
 
@@ -165,7 +178,7 @@ bun run dev:firefox # build, then launch Firefox with web-ext (downloads web-ext
 ```
 src/
   background.ts          agent session, tool execution, provider dispatch
-  panel.html/.css/.ts    sidebar UI, provider settings, streaming renderer
+  panel.html/.css/.ts    sidebar UI, per-tab transcripts, provider settings, streaming renderer
   manifest.json          Manifest V2 for Firefox
   lib/
     agent.ts             the model ↔ tool loop (framework-free, unit tested)
@@ -211,10 +224,12 @@ Arbitrary, model-authored JavaScript in a tab needs `tabs.executeScript({ code }
 - Models without tool calling cannot use Brogent.
 - The isolated world cannot call functions defined by the page (React handlers, page globals). Use DOM events (`element.click()`) instead.
 - Tool results are capped (60k characters, `read_page` at `max_chars`), so very large pages need selector-scoped reads or scripted extraction.
+- Transcripts are scoped to the tab for the current browser session; they are not preserved after a restart (tab ids change).
 - Model-list endpoints differ between providers; if one is unavailable, type the model name manually.
 - Some reasoning models reject `temperature`; the OpenAI adapter retries once without it.
 - Streaming with tools depends on the provider. If a model misbehaves, turn **Stream responses** off.
-- One conversation is kept at a time; there is no cross-tab memory or scheduled automation yet.
+- One run at a time; the sidebar is pinned to the running tab until it finishes.
+- No cross-tab memory or scheduled automation yet.
 
 ## Ideas / next steps
 

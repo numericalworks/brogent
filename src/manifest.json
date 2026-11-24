@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Brogent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An AI browser agent for Firefox: read, summarize, extract from, and modify the current tab with Ollama, OpenAI, Anthropic, Gemini, or any OpenAI-compatible model.",
   "browser_specific_settings": {
     "gecko": {
