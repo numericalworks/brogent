@@ -63,6 +63,7 @@ describe("normalizeConfig", () => {
 
     expect(config.maxSteps).toBe(DEFAULT_CONFIG.maxSteps);
     expect(config.temperature).toBe(DEFAULT_CONFIG.temperature);
+    expect(config.chatFontSize).toBe(DEFAULT_CONFIG.chatFontSize);
     expect(config.systemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
   });
 
@@ -71,5 +72,8 @@ describe("normalizeConfig", () => {
     expect(normalizeConfig({ maxSteps: -4 }).maxSteps).toBe(DEFAULT_CONFIG.maxSteps);
     expect(normalizeConfig({ temperature: 4 }).temperature).toBe(2);
     expect(normalizeConfig({ temperature: -1 }).temperature).toBe(0);
+    expect(normalizeConfig({ chatFontSize: 99 }).chatFontSize).toBe(20);
+    expect(normalizeConfig({ chatFontSize: 4 }).chatFontSize).toBe(11);
+    expect(normalizeConfig({ chatFontSize: Number.NaN }).chatFontSize).toBe(DEFAULT_CONFIG.chatFontSize);
   });
 });

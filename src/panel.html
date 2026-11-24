@@ -56,6 +56,8 @@
           <textarea id="input" rows="1" placeholder="Ask about this page, or tell me what to change…" aria-label="Message"></textarea>
           <div class="composer-actions">
             <span class="hint">Enter to send · Shift+Enter for a new line</span>
+            <button id="btn-font-smaller" class="icon-button text-size" type="button" title="Smaller text" aria-label="Smaller text">A−</button>
+            <button id="btn-font-larger" class="icon-button text-size" type="button" title="Larger text" aria-label="Larger text">A+</button>
             <button id="btn-send" class="send-button" type="button" title="Send" aria-label="Send">↑</button>
           </div>
         </div>
@@ -116,6 +118,13 @@
           <label class="field-row">
             <span>Max tool steps</span>
             <input id="input-max-steps" type="number" min="1" max="20" step="1" />
+          </label>
+          <label class="field-row">
+            <span>Text size</span>
+            <div class="range-row">
+              <input id="input-font-size" type="range" min="11" max="20" step="1" />
+              <output id="font-size-value" class="range-value" for="input-font-size">13px</output>
+            </div>
           </label>
           <label class="check-row">
             <input id="input-confirm" type="checkbox" />

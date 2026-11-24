@@ -190,6 +190,25 @@ pre {
   font-size: 12px;
 }
 
+.icon-button.text-size {
+  width: 24px;
+  height: 24px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.icon-button:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------------ target bar */
 
 .target-bar {
@@ -230,6 +249,7 @@ pre {
   flex-direction: column;
   gap: 10px;
   scroll-behavior: smooth;
+  font-size: var(--chat-font-size, 13px);
 }
 
 .messages:empty {
@@ -311,10 +331,10 @@ pre {
 .message.assistant.is-streaming::after {
   content: "";
   display: inline-block;
-  width: 6px;
-  height: 13px;
-  margin-left: 2px;
-  vertical-align: -2px;
+  width: 0.46em;
+  height: 1em;
+  margin-left: 0.15em;
+  vertical-align: -0.15em;
   background: var(--accent);
   border-radius: 1px;
   animation: blink 1s steps(2, start) infinite;
@@ -332,13 +352,13 @@ pre {
   border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
   background: color-mix(in srgb, var(--danger) 9%, transparent);
   color: var(--danger);
-  font-size: 12.5px;
+  font-size: 0.96em;
   white-space: pre-wrap;
 }
 
 .message.note {
   align-self: center;
-  font-size: 11.5px;
+  font-size: 0.88em;
   color: var(--muted);
 }
 
@@ -369,21 +389,21 @@ pre {
 }
 
 .markdown h1 {
-  font-size: 17px;
+  font-size: 1.31em;
 }
 
 .markdown h2 {
-  font-size: 15.5px;
+  font-size: 1.19em;
 }
 
 .markdown h3 {
-  font-size: 14px;
+  font-size: 1.08em;
 }
 
 .markdown h4,
 .markdown h5,
 .markdown h6 {
-  font-size: 13px;
+  font-size: 1em;
   color: var(--muted);
 }
 
@@ -429,14 +449,14 @@ pre {
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 0 4px;
-  font-size: 11.8px;
+  font-size: 0.91em;
 }
 
 .markdown table {
   border-collapse: collapse;
   width: 100%;
   margin: 0 0 9px;
-  font-size: 12px;
+  font-size: 0.92em;
 }
 
 .markdown th,
@@ -472,7 +492,7 @@ pre {
   margin: 0;
   padding: 4px 10px 9px;
   overflow-x: auto;
-  font-size: 11.8px;
+  font-size: 0.91em;
   line-height: 1.5;
 }
 
@@ -484,7 +504,7 @@ pre {
 }
 
 .code-lang {
-  font: 10px/1.4 var(--mono);
+  font: 0.77em/1.4 var(--mono);
   color: var(--muted);
   text-transform: lowercase;
 }
@@ -494,7 +514,7 @@ pre {
   background: var(--bg-raised);
   color: var(--muted);
   border-radius: 5px;
-  font-size: 10px;
+  font-size: 0.77em;
   padding: 1px 6px;
   opacity: 0.8;
   transition: opacity 120ms ease, color 120ms ease;
@@ -522,7 +542,7 @@ pre {
   padding: 6px 9px;
   cursor: pointer;
   list-style: none;
-  font-size: 11.8px;
+  font-size: 0.91em;
   color: var(--muted);
   user-select: none;
 }
@@ -564,7 +584,7 @@ pre {
 
 .tool-name {
   font-family: var(--mono);
-  font-size: 11.2px;
+  font-size: 0.86em;
   color: var(--text);
   overflow: hidden;
   white-space: nowrap;
@@ -573,7 +593,7 @@ pre {
 
 .tool-duration {
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: 0.81em;
   flex: none;
 }
 
@@ -586,7 +606,7 @@ pre {
 }
 
 .tool-section-label {
-  font-size: 10px;
+  font-size: 0.77em;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -601,7 +621,7 @@ pre {
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 6px 8px;
-  font-size: 11.2px;
+  font-size: 0.86em;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -621,7 +641,7 @@ pre {
 
 .confirm-title {
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 0.96em;
   margin-bottom: 5px;
 }
 
@@ -633,7 +653,7 @@ pre {
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 7px 8px;
-  font-size: 11.2px;
+  font-size: 0.86em;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -651,7 +671,7 @@ pre {
 }
 
 .confirm-result {
-  font-size: 11.5px;
+  font-size: 0.88em;
   color: var(--muted);
 }
 
@@ -776,6 +796,7 @@ pre {
   max-height: 160px;
   min-height: 38px;
   line-height: 1.45;
+  font-size: var(--chat-font-size, 13px);
 }
 
 .composer textarea::placeholder {
@@ -909,6 +930,30 @@ pre {
 
 .provider-select {
   font-size: 12.5px;
+}
+
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.range-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--accent);
+}
+
+.range-value {
+  min-width: 34px;
+  text-align: right;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 .input-with-button {

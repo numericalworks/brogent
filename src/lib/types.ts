@@ -48,6 +48,8 @@ export interface AppConfig {
   confirmScripts: boolean;
   /** Stream tokens as they are generated. */
   stream: boolean;
+  /** Transcript text size in pixels (UI preference). */
+  chatFontSize: number;
   systemPrompt: string;
 }
 
@@ -82,6 +84,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   maxSteps: 6,
   confirmScripts: true,
   stream: true,
+  chatFontSize: 13,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
 };
 
@@ -145,6 +148,9 @@ export function normalizeConfig(partial?: Partial<AppConfig> | null): AppConfig 
     Number.isFinite(raw.maxSteps) && (raw.maxSteps as number) >= 1
       ? Math.min(20, Math.round(raw.maxSteps as number))
       : DEFAULT_CONFIG.maxSteps;
+  const chatFontSize = Number.isFinite(raw.chatFontSize)
+    ? Math.min(20, Math.max(11, Math.round(raw.chatFontSize as number)))
+    : DEFAULT_CONFIG.chatFontSize;
 
   return {
     provider,
@@ -153,6 +159,7 @@ export function normalizeConfig(partial?: Partial<AppConfig> | null): AppConfig 
     maxSteps,
     confirmScripts: typeof raw.confirmScripts === "boolean" ? raw.confirmScripts : DEFAULT_CONFIG.confirmScripts,
     stream: typeof raw.stream === "boolean" ? raw.stream : DEFAULT_CONFIG.stream,
+    chatFontSize,
     systemPrompt:
       typeof raw.systemPrompt === "string" && raw.systemPrompt.trim()
         ? raw.systemPrompt

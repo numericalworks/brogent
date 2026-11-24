@@ -31,6 +31,8 @@ const CONVERSATION_PREFIX = "brogent:conversation:";
 const ORPHAN_KEY = "none";
 const MAX_CONVERSATIONS = 30;
 const MAX_ITEMS_PER_TAB = 60;
+const MIN_FONT_SIZE = 11;
+const MAX_FONT_SIZE = 20;
 
 /* ------------------------------------------------------------------ DOM */
 
@@ -125,6 +127,8 @@ const connDot = byId("conn-dot");
 const modelSelect = byId<HTMLSelectElement>("model-select");
 const newBtn = byId<HTMLButtonElement>("btn-new");
 const settingsBtn = byId<HTMLButtonElement>("btn-settings");
+const fontSmallerBtn = byId<HTMLButtonElement>("btn-font-smaller");
+const fontLargerBtn = byId<HTMLButtonElement>("btn-font-larger");
 const closeSettingsBtn = byId<HTMLButtonElement>("btn-close-settings");
 const refreshTargetBtn = byId<HTMLButtonElement>("btn-refresh-target");
 const settingsEl = byId("settings");
@@ -140,6 +144,8 @@ const refreshModelsBtn = byId<HTMLButtonElement>("btn-refresh-models");
 const modelsStatus = byId("models-status");
 const temperatureInput = byId<HTMLInputElement>("input-temperature");
 const maxStepsInput = byId<HTMLInputElement>("input-max-steps");
+const fontSizeInput = byId<HTMLInputElement>("input-font-size");
+const fontSizeValue = byId<HTMLOutputElement>("font-size-value");
 const confirmInput = byId<HTMLInputElement>("input-confirm");
 const streamInput = byId<HTMLInputElement>("input-stream");
 const systemPromptInput = byId<HTMLTextAreaElement>("input-system-prompt");
@@ -295,6 +301,7 @@ function handleEvent(event: BackgroundEvent): void {
     case "ready":
       state.config = event.config;
       if (settingsEl.hidden) fillSettingsForm(event.config);
+      else applyChatFontSize(event.config.chatFontSize);
       updateModelSelect();
       requestModels();
       return;
@@ -900,6 +907,33 @@ async function syncActiveTab(): Promise<void> {
 
 /* ------------------------------------------------------------ settings */
 
+function clampChatFontSize(size: number): number {
+  return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)));
+}
+
+/** Applies the transcript text size without writing to storage. */
+function applyChatFontSize(size: number): void {
+  const stickToBottom = isNearBottom();
+  const value = clampChatFontSize(size);
+  state.config.chatFontSize = value;
+  document.documentElement.style.setProperty("--chat-font-size", `${value}px`);
+  fontSizeInput.value = String(value);
+  fontSizeValue.textContent = `${value}px`;
+  fontSmallerBtn.disabled = value <= MIN_FONT_SIZE;
+  fontLargerBtn.disabled = value >= MAX_FONT_SIZE;
+  autoGrow();
+  if (stickToBottom) scrollToBottom(true);
+}
+
+function saveChatFontSize(size: number): void {
+  applyChatFontSize(size);
+  persistConfig();
+}
+
+function nudgeChatFontSize(delta: number): void {
+  saveChatFontSize(state.config.chatFontSize + delta);
+}
+
 function currentProvider(): ProviderDefinition {
   return getProvider(state.config.provider);
 }
@@ -967,6 +1001,7 @@ function fillSettingsForm(config: AppConfig): void {
   fillProviderFields(config.provider);
   temperatureInput.value = String(config.temperature);
   maxStepsInput.value = String(config.maxSteps);
+  applyChatFontSize(config.chatFontSize);
   confirmInput.checked = config.confirmScripts;
   streamInput.checked = config.stream;
   systemPromptInput.value = config.systemPrompt;
@@ -1021,6 +1056,7 @@ function switchProvider(id: ProviderId): void {
 function readSettingsForm(): AppConfig {
   const temperature = Number.parseFloat(temperatureInput.value);
   const maxSteps = Number.parseInt(maxStepsInput.value, 10);
+  const chatFontSize = Number.parseInt(fontSizeInput.value, 10);
   return {
     ...state.config,
     providers: {
@@ -1029,6 +1065,7 @@ function readSettingsForm(): AppConfig {
     },
     temperature: Number.isFinite(temperature) ? Math.min(2, Math.max(0, temperature)) : DEFAULT_CONFIG.temperature,
     maxSteps: Number.isFinite(maxSteps) ? Math.min(20, Math.max(1, maxSteps)) : DEFAULT_CONFIG.maxSteps,
+    chatFontSize: Number.isFinite(chatFontSize) ? clampChatFontSize(chatFontSize) : state.config.chatFontSize,
     confirmScripts: confirmInput.checked,
     stream: streamInput.checked,
     systemPrompt: systemPromptInput.value.trim() || DEFAULT_SYSTEM_PROMPT,
@@ -1316,6 +1353,16 @@ function wireEvents(): void {
     const showing = apiKeyInput.type === "text";
     apiKeyInput.type = showing ? "password" : "text";
     toggleKeyBtn.textContent = showing ? "Show" : "Hide";
+  });
+
+  fontSmallerBtn.addEventListener("click", () => nudgeChatFontSize(-1));
+  fontLargerBtn.addEventListener("click", () => nudgeChatFontSize(1));
+
+  fontSizeInput.addEventListener("input", () => {
+    applyChatFontSize(Number.parseInt(fontSizeInput.value, 10) || state.config.chatFontSize);
+  });
+  fontSizeInput.addEventListener("change", () => {
+    saveChatFontSize(Number.parseInt(fontSizeInput.value, 10) || state.config.chatFontSize);
   });
 
   window.addEventListener("focus", () => void syncActiveTab());
