@@ -237,7 +237,47 @@ pre {
 }
 
 .message {
+  position: relative;
   animation: rise 140ms ease-out;
+}
+
+.message.assistant {
+  /* The chip sits in this reserved gutter, clear of text and code blocks. */
+  padding-right: 26px;
+}
+
+.msg-copy {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.25;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.message:hover .msg-copy,
+.msg-copy:focus-visible {
+  opacity: 1;
+}
+
+.msg-copy:hover {
+  color: var(--accent);
+  border-color: var(--border);
+  background: var(--bg-raised);
+}
+
+.msg-copy.copied {
+  opacity: 1;
+  color: var(--ok);
 }
 
 @keyframes rise {
@@ -254,7 +294,8 @@ pre {
 .message.user {
   align-self: flex-end;
   max-width: 88%;
-  padding: 7px 11px;
+  /* The right padding leaves room for the hover copy chip. */
+  padding: 7px 30px 7px 11px;
   border-radius: 13px 13px 3px 13px;
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);

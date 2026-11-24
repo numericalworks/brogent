@@ -6,6 +6,8 @@
  * actually use: headings, lists, quotes, code, tables, emphasis and links.
  */
 
+import { copyToClipboard } from "./clipboard";
+
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -123,21 +125,12 @@ function codeBlock(code: string, language: string): HTMLElement {
   copy.type = "button";
   copy.textContent = "Copy";
   copy.addEventListener("click", () => {
-    if (!navigator.clipboard) {
-      copy.textContent = "Unavailable";
-      return;
-    }
-    void navigator.clipboard
-      .writeText(code)
-      .then(() => {
-        copy.textContent = "Copied";
-        window.setTimeout(() => {
-          copy.textContent = "Copy";
-        }, 1200);
-      })
-      .catch(() => {
-        copy.textContent = "Failed";
-      });
+    void copyToClipboard(code).then((copied) => {
+      copy.textContent = copied ? "Copied" : "Failed";
+      window.setTimeout(() => {
+        copy.textContent = "Copy";
+      }, 1200);
+    });
   });
 
   head.append(label, copy);

@@ -1,3 +1,4 @@
+import { copyToClipboard } from "./lib/clipboard";
 import { normalizeBaseUrl } from "./lib/llm/http";
 import { renderMarkdown } from "./lib/markdown";
 import { sanitizeHistory } from "./lib/messages";
@@ -43,6 +44,71 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): H
   const node = document.createElement(tag);
   if (className) node.className = className;
   return node;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgIcon(kind: "copy" | "check"): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "13");
+  svg.setAttribute("height", "13");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.9");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+
+  if (kind === "copy") {
+    const back = document.createElementNS(SVG_NS, "rect");
+    back.setAttribute("x", "9");
+    back.setAttribute("y", "9");
+    back.setAttribute("width", "11");
+    back.setAttribute("height", "11");
+    back.setAttribute("rx", "2");
+    const front = document.createElementNS(SVG_NS, "path");
+    front.setAttribute("d", "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1");
+    svg.append(back, front);
+  } else {
+    const check = document.createElementNS(SVG_NS, "path");
+    check.setAttribute("d", "M20 6 9 17l-5-5");
+    svg.append(check);
+  }
+
+  return svg;
+}
+
+/** A hover-revealed copy chip that lives in the transcript's right gutter. */
+function copyButton(getText: () => string, label: string): HTMLButtonElement {
+  const button = h("button", "msg-copy");
+  button.type = "button";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(svgIcon("copy"));
+
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void copyToClipboard(getText()).then((copied) => {
+      if (!copied) {
+        showToast("Could not copy to the clipboard.");
+        return;
+      }
+      button.classList.add("copied");
+      button.title = "Copied";
+      button.setAttribute("aria-label", "Copied");
+      button.replaceChildren(svgIcon("check"));
+      window.setTimeout(() => {
+        button.classList.remove("copied");
+        button.title = label;
+        button.setAttribute("aria-label", label);
+        button.replaceChildren(svgIcon("copy"));
+      }, 1400);
+    });
+  });
+
+  return button;
 }
 
 const messagesEl = byId("messages");
@@ -438,6 +504,7 @@ function buildItemElement(item: UiItem): HTMLElement | null {
     case "user": {
       const element = h("div", "message user");
       element.textContent = item.content;
+      element.append(copyButton(() => item.content, "Copy prompt"));
       return element;
     }
 
@@ -445,6 +512,7 @@ function buildItemElement(item: UiItem): HTMLElement | null {
       if (!item.content.trim()) return null;
       const element = h("div", "message assistant markdown");
       element.append(renderMarkdown(item.content));
+      element.append(copyButton(() => item.content, "Copy response"));
       return element;
     }
 

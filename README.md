@@ -11,6 +11,7 @@ Brogent has no backend. It talks directly from your browser to the provider you 
 - **Read the current tab.** The model gets the page's visible text, cleaned HTML, all links, the heading outline, or your current selection.
 - **Run JavaScript in the tab.** Precise extraction and page changes are done by writing DOM code that runs in the page and returns JSON.
 - **Keep a conversation per tab.** Switch tabs and the sidebar switches to that tab's transcript. Each tab's agent history targets that tab's page.
+- **Copy prompts and answers.** Hover any prompt or response for a copy button; code blocks have their own copy button too.
 - **Summarize, extract, modify.** Summaries, tables of extracted data, translations, dark mode, readability tweaks, removing clutter — anything expressible as read + script.
 - **Use the model you already pay for.** Ollama, OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, xAI, OpenRouter, Together, Fireworks, Cerebras, Moonshot, Qwen, or any OpenAI-compatible endpoint.
 - **Stay in control.** By default Brogent asks before running model-authored JavaScript, and every script is shown to you first.
