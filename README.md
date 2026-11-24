@@ -203,7 +203,6 @@ src/
       http.ts            shared streaming, errors, tool-call normalization
       types.ts           normalized ChatEvent / ChatRequest shapes
 scripts/
-  icons.ts               PNG icon renderer (no image dependencies)
   zip.ts                 minimal ZIP writer for the .xpi
   package.ts             packages dist/ into brogent.xpi
 tests/                   bun:test suites
