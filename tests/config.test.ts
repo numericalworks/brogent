@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_CONFIG, DEFAULT_SYSTEM_PROMPT, normalizeConfig, type AppConfig } from "../src/lib/types";
+import {
+  DEFAULT_CONFIG,
+  DEFAULT_CUSTOM_THEME,
+  DEFAULT_SYSTEM_PROMPT,
+  normalizeConfig,
+  type AppConfig,
+} from "../src/lib/types";
 
 const legacy = (value: Record<string, unknown>) => value as unknown as Partial<AppConfig>;
 
@@ -75,5 +81,30 @@ describe("normalizeConfig", () => {
     expect(normalizeConfig({ chatFontSize: 99 }).chatFontSize).toBe(20);
     expect(normalizeConfig({ chatFontSize: 4 }).chatFontSize).toBe(11);
     expect(normalizeConfig({ chatFontSize: Number.NaN }).chatFontSize).toBe(DEFAULT_CONFIG.chatFontSize);
+  });
+
+  test("normalizes appearance preferences", () => {
+    expect(normalizeConfig().theme).toBe("auto");
+    expect(normalizeConfig({ theme: "coffee" }).theme).toBe("coffee");
+    expect(normalizeConfig(legacy({ theme: "neon" })).theme).toBe("auto");
+  });
+
+  test("keeps valid custom theme colors", () => {
+    const custom = {
+      base: "light" as const,
+      background: "#fafafa",
+      text: "#111111",
+      accent: "#ff0066",
+    };
+
+    expect(normalizeConfig({ customTheme: custom }).customTheme).toEqual(custom);
+  });
+
+  test("repairs invalid custom theme values", () => {
+    const config = normalizeConfig(
+      legacy({ customTheme: { base: "sideways", background: "red", text: 42, accent: "#abc" } }),
+    );
+
+    expect(config.customTheme).toEqual({ ...DEFAULT_CUSTOM_THEME, accent: "#abc" });
   });
 });

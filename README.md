@@ -13,6 +13,7 @@ Brogent has no backend. It talks directly from your browser to the provider you 
 - **Keep a conversation per tab.** Switch tabs and the sidebar switches to that tab's transcript. Each tab's agent history targets that tab's page.
 - **Copy prompts and answers.** Hover any prompt or response for a copy button; code blocks have their own copy button too.
 - **Read comfortably.** **A− / A+** in the composer (or the Text size slider in settings) scales prompts, answers, code blocks, and tool output from 11 to 20 px.
+- **Make it yours.** Pick light, dark, ash, coffee, or **auto** (follows your system appearance live), or build a **custom** palette from a background, text, and accent color.
 - **Summarize, extract, modify.** Summaries, tables of extracted data, translations, dark mode, readability tweaks, removing clutter — anything expressible as read + script.
 - **Use the model you already pay for.** Ollama, OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, xAI, OpenRouter, Together, Fireworks, Cerebras, Moonshot, Qwen, or any OpenAI-compatible endpoint.
 - **Stay in control.** By default Brogent asks before running model-authored JavaScript, and every script is shown to you first.
@@ -159,6 +160,7 @@ The model can call two tools. They target whichever tab was active when you pres
 | Temperature | `0.2` | Lower is more deterministic. Clamped per provider. |
 | Max tool steps | `6` | Model ↔ tool round trips per message. |
 | Text size | `13px` | Transcript size (11–20 px). Use **A− / A+** in the composer or the slider in settings. |
+| Theme | Auto | Light, dark, ash, coffee, or custom. **Auto** follows the system appearance and reacts to changes; **custom** takes a background, text, and accent color (plus a dark/light base for native controls). Theme changes apply immediately. |
 | Ask before running JavaScript | on | Shows the code and waits for **Run**/**Skip**. |
 | Stream responses | on | Turn off if a provider dislikes streaming with tools. |
 | System prompt | built in | Edit it to change the agent's behavior or add house rules. |

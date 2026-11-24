@@ -17,12 +17,16 @@ import { describeToolCall } from "./lib/tools";
 import {
   CONFIG_KEY,
   DEFAULT_CONFIG,
+  DEFAULT_CUSTOM_THEME,
   DEFAULT_SYSTEM_PROMPT,
   ITEMS_KEY,
+  isThemeId,
   normalizeConfig,
   type AppConfig,
   type ChatMessage,
+  type CustomTheme,
   type ProviderSettings,
+  type ThemeId,
   type ToolCall,
 } from "./lib/types";
 
@@ -33,6 +37,12 @@ const MAX_CONVERSATIONS = 30;
 const MAX_ITEMS_PER_TAB = 60;
 const MIN_FONT_SIZE = 11;
 const MAX_FONT_SIZE = 20;
+
+// Resolve the OS appearance before anything renders, so the sidebar does not
+// flash light when the user prefers dark.
+const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+document.documentElement.dataset.theme = systemDark.matches ? "dark" : "light";
+document.documentElement.style.colorScheme = systemDark.matches ? "dark" : "light";
 
 /* ------------------------------------------------------------------ DOM */
 
@@ -133,6 +143,12 @@ const closeSettingsBtn = byId<HTMLButtonElement>("btn-close-settings");
 const refreshTargetBtn = byId<HTMLButtonElement>("btn-refresh-target");
 const settingsEl = byId("settings");
 const settingsForm = byId<HTMLFormElement>("settings-form");
+const themeSelect = byId<HTMLSelectElement>("theme-select");
+const customThemeFields = byId("custom-theme-fields");
+const customBaseSelect = byId<HTMLSelectElement>("custom-theme-base");
+const customBgInput = byId<HTMLInputElement>("custom-theme-bg");
+const customTextInput = byId<HTMLInputElement>("custom-theme-text");
+const customAccentInput = byId<HTMLInputElement>("custom-theme-accent");
 const providerSelect = byId<HTMLSelectElement>("provider-select");
 const providerHint = byId("provider-hint");
 const baseUrlInput = byId<HTMLInputElement>("input-base-url");
@@ -300,8 +316,12 @@ function handleEvent(event: BackgroundEvent): void {
   switch (event.type) {
     case "ready":
       state.config = event.config;
-      if (settingsEl.hidden) fillSettingsForm(event.config);
-      else applyChatFontSize(event.config.chatFontSize);
+      if (settingsEl.hidden) {
+        fillSettingsForm(event.config);
+      } else {
+        applyChatFontSize(event.config.chatFontSize);
+        applyTheme(event.config);
+      }
       updateModelSelect();
       requestModels();
       return;
@@ -934,6 +954,56 @@ function nudgeChatFontSize(delta: number): void {
   saveChatFontSize(state.config.chatFontSize + delta);
 }
 
+function resolveTheme(theme: ThemeId): Exclude<ThemeId, "auto"> {
+  if (theme === "auto") return systemDark.matches ? "dark" : "light";
+  return theme;
+}
+
+function normalizeHexColor(value: string, fallback: string): string {
+  const color = value.trim();
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color) ? color : fallback;
+}
+
+function readCustomTheme(): CustomTheme {
+  return {
+    base: customBaseSelect.value === "light" ? "light" : "dark",
+    background: normalizeHexColor(customBgInput.value, DEFAULT_CUSTOM_THEME.background),
+    text: normalizeHexColor(customTextInput.value, DEFAULT_CUSTOM_THEME.text),
+    accent: normalizeHexColor(customAccentInput.value, DEFAULT_CUSTOM_THEME.accent),
+  };
+}
+
+function applyTheme(config: AppConfig): void {
+  const root = document.documentElement;
+  const resolved = resolveTheme(config.theme);
+  root.dataset.theme = resolved;
+  root.style.colorScheme =
+    resolved === "custom"
+      ? config.customTheme.base
+      : resolved === "dark" || resolved === "ash"
+        ? "dark"
+        : "light";
+
+  if (resolved === "custom") {
+    root.style.setProperty("--custom-bg", config.customTheme.background);
+    root.style.setProperty("--custom-text", config.customTheme.text);
+    root.style.setProperty("--custom-accent", config.customTheme.accent);
+  }
+
+  themeSelect.value = config.theme;
+  customThemeFields.hidden = config.theme !== "custom";
+  customBaseSelect.value = config.customTheme.base;
+  customBgInput.value = config.customTheme.background;
+  customTextInput.value = config.customTheme.text;
+  customAccentInput.value = config.customTheme.accent;
+}
+
+/** Live preview while a color picker is being dragged. */
+function previewCustomTheme(): void {
+  state.config.customTheme = readCustomTheme();
+  applyTheme(state.config);
+}
+
 function currentProvider(): ProviderDefinition {
   return getProvider(state.config.provider);
 }
@@ -1002,6 +1072,7 @@ function fillSettingsForm(config: AppConfig): void {
   temperatureInput.value = String(config.temperature);
   maxStepsInput.value = String(config.maxSteps);
   applyChatFontSize(config.chatFontSize);
+  applyTheme(config);
   confirmInput.checked = config.confirmScripts;
   streamInput.checked = config.stream;
   systemPromptInput.value = config.systemPrompt;
@@ -1066,6 +1137,8 @@ function readSettingsForm(): AppConfig {
     temperature: Number.isFinite(temperature) ? Math.min(2, Math.max(0, temperature)) : DEFAULT_CONFIG.temperature,
     maxSteps: Number.isFinite(maxSteps) ? Math.min(20, Math.max(1, maxSteps)) : DEFAULT_CONFIG.maxSteps,
     chatFontSize: Number.isFinite(chatFontSize) ? clampChatFontSize(chatFontSize) : state.config.chatFontSize,
+    theme: isThemeId(themeSelect.value) ? themeSelect.value : state.config.theme,
+    customTheme: readCustomTheme(),
     confirmScripts: confirmInput.checked,
     stream: streamInput.checked,
     systemPrompt: systemPromptInput.value.trim() || DEFAULT_SYSTEM_PROMPT,
@@ -1363,6 +1436,29 @@ function wireEvents(): void {
   });
   fontSizeInput.addEventListener("change", () => {
     saveChatFontSize(Number.parseInt(fontSizeInput.value, 10) || state.config.chatFontSize);
+  });
+
+  themeSelect.addEventListener("change", () => {
+    state.config.theme = isThemeId(themeSelect.value) ? themeSelect.value : "auto";
+    applyTheme(state.config);
+    persistConfig();
+  });
+
+  customBaseSelect.addEventListener("change", () => {
+    previewCustomTheme();
+    persistConfig();
+  });
+
+  for (const input of [customBgInput, customTextInput, customAccentInput]) {
+    input.addEventListener("input", previewCustomTheme);
+    input.addEventListener("change", () => {
+      previewCustomTheme();
+      persistConfig();
+    });
+  }
+
+  systemDark.addEventListener("change", () => {
+    if (state.config.theme === "auto") applyTheme(state.config);
   });
 
   window.addEventListener("focus", () => void syncActiveTab());

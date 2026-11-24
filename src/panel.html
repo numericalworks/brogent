@@ -72,6 +72,51 @@
 
       <form id="settings-form" class="settings-body">
         <fieldset class="field">
+          <legend>Appearance</legend>
+          <label class="field-row">
+            <span>Theme</span>
+            <select id="theme-select">
+              <option value="auto">Auto (system)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+              <option value="ash">Ash</option>
+              <option value="coffee">Coffee</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </label>
+          <label class="field-row">
+            <span>Text size</span>
+            <div class="range-row">
+              <input id="input-font-size" type="range" min="11" max="20" step="1" />
+              <output id="font-size-value" class="range-value" for="input-font-size">13px</output>
+            </div>
+          </label>
+          <p class="field-note">Auto follows your system appearance.</p>
+
+          <div id="custom-theme-fields" class="custom-theme" hidden>
+            <label class="field-row">
+              <span>Base</span>
+              <select id="custom-theme-base">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>Background</span>
+              <input id="custom-theme-bg" type="color" />
+            </label>
+            <label class="field-row">
+              <span>Text</span>
+              <input id="custom-theme-text" type="color" />
+            </label>
+            <label class="field-row">
+              <span>Accent</span>
+              <input id="custom-theme-accent" type="color" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="field">
           <legend>Provider</legend>
           <label class="field-row">
             <span>Provider</span>
@@ -118,13 +163,6 @@
           <label class="field-row">
             <span>Max tool steps</span>
             <input id="input-max-steps" type="number" min="1" max="20" step="1" />
-          </label>
-          <label class="field-row">
-            <span>Text size</span>
-            <div class="range-row">
-              <input id="input-font-size" type="range" min="11" max="20" step="1" />
-              <output id="font-size-value" class="range-value" for="input-font-size">13px</output>
-            </div>
           </label>
           <label class="check-row">
             <input id="input-confirm" type="checkbox" />

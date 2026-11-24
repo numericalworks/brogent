@@ -39,6 +39,30 @@ export interface ProviderSettings {
   model?: string;
 }
 
+export type ThemeId = "auto" | "light" | "dark" | "ash" | "coffee" | "custom";
+export type ThemeBase = "light" | "dark";
+
+export interface CustomTheme {
+  /** Controls native controls, scrollbars, and the derived palette direction. */
+  base: ThemeBase;
+  background: string;
+  text: string;
+  accent: string;
+}
+
+export const THEME_IDS: readonly ThemeId[] = ["auto", "light", "dark", "ash", "coffee", "custom"];
+
+export const DEFAULT_CUSTOM_THEME: CustomTheme = {
+  base: "dark",
+  background: "#1b1c22",
+  text: "#e9e9ef",
+  accent: "#8f82ff",
+};
+
+export function isThemeId(value: unknown): value is ThemeId {
+  return typeof value === "string" && (THEME_IDS as readonly string[]).includes(value);
+}
+
 export interface AppConfig {
   provider: ProviderId;
   providers: Partial<Record<ProviderId, ProviderSettings>>;
@@ -50,6 +74,9 @@ export interface AppConfig {
   stream: boolean;
   /** Transcript text size in pixels (UI preference). */
   chatFontSize: number;
+  /** Color theme; "auto" follows the operating system. */
+  theme: ThemeId;
+  customTheme: CustomTheme;
   systemPrompt: string;
 }
 
@@ -85,6 +112,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   confirmScripts: true,
   stream: true,
   chatFontSize: 13,
+  theme: "auto",
+  customTheme: DEFAULT_CUSTOM_THEME,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
 };
 
@@ -107,6 +136,27 @@ function normalizeProviders(input: unknown): Partial<Record<ProviderId, Provider
     output[id] = entry;
   }
   return output;
+}
+
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+function normalizeCustomTheme(input: unknown): CustomTheme {
+  if (!isRecord(input)) return { ...DEFAULT_CUSTOM_THEME };
+  return {
+    base: input.base === "light" ? "light" : input.base === "dark" ? "dark" : DEFAULT_CUSTOM_THEME.base,
+    background:
+      typeof input.background === "string" && HEX_COLOR.test(input.background)
+        ? input.background
+        : DEFAULT_CUSTOM_THEME.background,
+    text:
+      typeof input.text === "string" && HEX_COLOR.test(input.text)
+        ? input.text
+        : DEFAULT_CUSTOM_THEME.text,
+    accent:
+      typeof input.accent === "string" && HEX_COLOR.test(input.accent)
+        ? input.accent
+        : DEFAULT_CUSTOM_THEME.accent,
+  };
 }
 
 interface LegacyConfig {
@@ -151,6 +201,8 @@ export function normalizeConfig(partial?: Partial<AppConfig> | null): AppConfig 
   const chatFontSize = Number.isFinite(raw.chatFontSize)
     ? Math.min(20, Math.max(11, Math.round(raw.chatFontSize as number)))
     : DEFAULT_CONFIG.chatFontSize;
+  const theme = isThemeId(raw.theme) ? raw.theme : DEFAULT_CONFIG.theme;
+  const customTheme = normalizeCustomTheme(raw.customTheme);
 
   return {
     provider,
@@ -160,6 +212,8 @@ export function normalizeConfig(partial?: Partial<AppConfig> | null): AppConfig 
     confirmScripts: typeof raw.confirmScripts === "boolean" ? raw.confirmScripts : DEFAULT_CONFIG.confirmScripts,
     stream: typeof raw.stream === "boolean" ? raw.stream : DEFAULT_CONFIG.stream,
     chatFontSize,
+    theme,
+    customTheme,
     systemPrompt:
       typeof raw.systemPrompt === "string" && raw.systemPrompt.trim()
         ? raw.systemPrompt
