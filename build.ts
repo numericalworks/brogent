@@ -8,7 +8,6 @@
 import { copyFile, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { existsSync, watch } from "node:fs";
 import { join, relative } from "node:path";
-import { renderIconPng } from "./scripts/icons";
 
 const root = import.meta.dir;
 const srcDir = join(root, "src");
@@ -23,12 +22,11 @@ function kb(bytes: number): string {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
-async function writeIcons(): Promise<void> {
+async function copyIcons(): Promise<void> {
   const iconsDir = join(distDir, "icons");
   await mkdir(iconsDir, { recursive: true });
   for (const size of ICON_SIZES) {
-    const png = renderIconPng(size);
-    await Bun.write(join(iconsDir, `icon-${size}.png`), png);
+    await copyFile(join(srcDir, "icons", `icon-${size}.png`), join(iconsDir, `icon-${size}.png`));
   }
 }
 
@@ -67,7 +65,7 @@ async function build(): Promise<void> {
   for (const file of STATIC_FILES) {
     await copyFile(join(srcDir, file), join(distDir, file));
   }
-  await writeIcons();
+  await copyIcons();
 
   console.log(`Brogent built in ${Math.round(performance.now() - started)} ms → dist/`);
   await reportBundle();
