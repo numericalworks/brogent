@@ -178,6 +178,8 @@ bun run package     # build without sourcemaps and produce brogent.xpi
 bun run dev:firefox # build, then launch Firefox with web-ext (downloads web-ext on first use)
 ```
 
+If Firefox is installed as a snap, run the dev launcher (not a bare `web-ext run`). Snap Firefox uses a private `/tmp`, so it can't see the temporary profile web-ext creates there and the debugger connection fails with `ECONNREFUSED`. `scripts/dev-firefox.ts` avoids this by pointing `TMPDIR` at `webext-tmp/` inside the repo, which the snap can read.
+
 ### Layout
 
 ```

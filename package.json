@@ -10,7 +10,7 @@
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test",
     "package": "bun run build.ts --no-sourcemap && bun run scripts/package.ts",
-    "dev:firefox": "bun run build.ts && bunx --bun web-ext run --source-dir dist"
+    "dev:firefox": "bun run build.ts && bun run scripts/dev-firefox.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.5",
